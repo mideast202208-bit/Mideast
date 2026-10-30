@@ -335,7 +335,7 @@ export function createApp(options = {}) {
   server.requestTimeout=30000;
   const tick=async()=>{
     if(sending)return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   return {server,db,tick,get config(){return config;}};
 }

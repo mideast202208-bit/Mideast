@@ -1,6 +1,7 @@
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
 import { uid, now, audit, runAutomations, fail, text } from './service.mjs';
+import { intakeSettings, renderReply } from './omni-config.mjs';
 
 export function configuration(env) {
   return {appSecret:env.META_APP_SECRET,verifyToken:env.META_VERIFY_TOKEN,accessToken:env.META_ACCESS_TOKEN,
@@ -12,7 +13,7 @@ export function acceptWebhook(db, raw) {
   db.prepare('INSERT OR IGNORE INTO webhook_events(id,digest,payload,created_at) VALUES(?,?,?,?)')
     .run(uid(), hash(raw), JSON.stringify(payload), now());
 }
-export function processWebhookQueue(db, config) {
+export function processWebhookQueue(db, config, origin = '') {
   const intake = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(config.intakeUser || '');
   if (!intake || !config.phoneId) return;
   const events = db.prepare("SELECT * FROM webhook_events WHERE status='new' ORDER BY created_at LIMIT 10").all();
@@ -57,6 +58,7 @@ export function processWebhookQueue(db, config) {
             const timestamp = Number(item.timestamp) * 1000;
             if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error('Invalid provider timestamp');
             const received = new Date(Math.min(timestamp,Date.now())).toISOString();
+            const firstInbound = !db.prepare("SELECT 1 FROM messages WHERE conversation_id=? AND direction='in' LIMIT 1").get(conversation.id);
             const messageId = uid();
             db.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?)')
               .run(messageId,conversation.id,item.id,'in',kind,body,content.id || null,JSON.stringify({filename:content.filename || ''}),'received',null,received);
@@ -64,6 +66,14 @@ export function processWebhookQueue(db, config) {
             // Explicit column names keep record shape changes visible and retain the latest inbound time.
             db.prepare('UPDATE conversations SET last_inbound=MAX(COALESCE(last_inbound,?),?) WHERE id=?').run(received,received,conversation.id);
             runAutomations(db,'whatsapp.received',contact,messageId);
+            if(firstInbound && windowOpen(received) && intakeSettings(db).whatsapp_auto_reply && /^https?:\/\//.test(origin)){
+              const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
+              const body=renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:origin+'/apply?source=whatsapp'});
+              const replyId=uid();
+              db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
+                VALUES(?,?,?,?,?,?,?,?)`).run(replyId,conversation.id,'out','text',body,JSON.stringify({type:'text',text:{body}}),'queued',now());
+              audit(db,intake,'auto_welcome','message',replyId);
+            }
           }
         }
         db.prepare("UPDATE webhook_events SET status='done',attempts=attempts+1 WHERE id=?").run(event.id);

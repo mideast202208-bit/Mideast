@@ -20,7 +20,7 @@ export function intakeSettings(db){return JSON.parse(db.prepare("SELECT value FR
 export function setIntakeSettings(db,user,input){
   if(user.role!=='admin')fail(403,'إعداد بوابة التسجيل للمالك');
   const current=intakeSettings(db),next={...current};
-  for(const key of ['enabled','social_auto_reply'])if(input[key]!==undefined){if(typeof input[key]!=='boolean')fail(400,'حالة غير صالحة');next[key]=input[key];}
+  for(const key of ['enabled','social_auto_reply','whatsapp_auto_reply'])if(input[key]!==undefined){if(typeof input[key]!=='boolean')fail(400,'حالة غير صالحة');next[key]=input[key];}
   for(const key of ['website','facebook','instagram'])if(input[key]!==undefined){
     let url;try{url=new URL(input[key]);}catch{fail(400,'رابط غير صالح');}
     if(url.protocol!=='https:'||url.username||url.password||url.port||url.search||url.hash)fail(400,'استخدم رابط HTTPS بدون رموز سرية أو معاملات');
