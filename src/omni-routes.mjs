@@ -6,6 +6,7 @@ import { connectMetaAccounts } from './meta-connect.mjs';
 import { socialThread,queueSocialReply,testSocialAccount,acceptSocialWebhook } from './social.mjs';
 import { runVirtualLab } from './virtual-lab.mjs';
 import { timingSafeEqual } from 'node:crypto';
+import {extraAccountConfigs} from './accounts.mjs';
 
 export function integrationLinks(origin){
   return {website:origin+'/apply?source=website',facebook:origin+'/apply?source=facebook',instagram:origin+'/apply?source=instagram',whatsapp:origin+'/apply?source=whatsapp',api:origin+'/api/external/registrations',facebook_webhook:origin+'/webhooks/facebook',instagram_webhook:origin+'/webhooks/instagram',whatsapp_webhook:origin+'/webhooks/whatsapp',connect_script:origin+'/connect.js'};
@@ -50,7 +51,7 @@ export async function handleOmniPublic(ctx){
     const channel=hook[1],config=channelConfig(db,channel,secretKey);
     if(method==='GET'){
       const url=new URL(req.url,'http://localhost'),given=Buffer.from(url.searchParams.get('hub.verify_token')||''),expected=Buffer.from(config?.verifyToken||'');
-      if(!config?.active||!expected.length||given.length!==expected.length||!timingSafeEqual(given,expected)||url.searchParams.get('hub.mode')!=='subscribe')fail(403,'Forbidden');
+      if(url.searchParams.get('hub.mode')!=='subscribe'||![config,...extraAccountConfigs(db,channel,secretKey)].some(c=>{const token=Buffer.from(c?.verifyToken||'');return token.length&&given.length===token.length&&timingSafeEqual(given,token);}))fail(403,'Forbidden');
       res.writeHead(200,{'Content-Type':'text/plain'});res.end(url.searchParams.get('hub.challenge')||'');return true;
     }
     if(method!=='POST')fail(405,'Method not allowed');

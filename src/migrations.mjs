@@ -1,3 +1,20 @@
+export function migrateV5(db){
+ if(db.prepare('SELECT 1 FROM schema_versions WHERE version=5').get())return;
+ db.exec('BEGIN IMMEDIATE');
+ try{db.exec(`
+  CREATE TABLE communication_accounts(id TEXT PRIMARY KEY,channel TEXT NOT NULL CHECK(channel IN('facebook','instagram','whatsapp')),
+   account_id TEXT NOT NULL,name TEXT NOT NULL,configuration_cipher TEXT NOT NULL,intake_user TEXT NOT NULL REFERENCES users(id),
+   active INTEGER NOT NULL DEFAULT 0,verified_at TEXT,subscribed INTEGER NOT NULL DEFAULT 0,last_event_at TEXT,created_at TEXT NOT NULL,
+   UNIQUE(channel,account_id));
+  CREATE TABLE message_accounts(message_id TEXT PRIMARY KEY REFERENCES messages(id),phone_id TEXT NOT NULL);
+  CREATE TABLE wa_thread_accounts(conversation_id TEXT NOT NULL REFERENCES conversations(id),phone_id TEXT NOT NULL,last_inbound TEXT,
+   PRIMARY KEY(conversation_id,phone_id));
+  CREATE TABLE assistant_chats(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),question TEXT NOT NULL,answer TEXT NOT NULL,created_at TEXT NOT NULL);
+  CREATE TABLE communication_thread_state(thread_key TEXT PRIMARY KEY,status TEXT NOT NULL CHECK(status IN('open','done')),updated_at TEXT NOT NULL);
+  CREATE TABLE communication_seen(user_id TEXT NOT NULL REFERENCES users(id),thread_key TEXT NOT NULL,seen_at TEXT NOT NULL,PRIMARY KEY(user_id,thread_key));
+  INSERT INTO schema_versions VALUES(5);
+ `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+}
 export function migrate(db) {
   if (db.prepare('SELECT 1 FROM schema_versions WHERE version=2').get()) return;
   db.exec('BEGIN IMMEDIATE');

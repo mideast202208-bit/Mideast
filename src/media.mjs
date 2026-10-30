@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { uid, now, fail, audit } from './service.mjs';
 import { intakeSettings } from './omni-config.mjs';
+import {messageWhatsAppConfig} from './accounts.mjs';
 
 export const mediaConfigured=config=>Boolean(config.accessToken&&/^v\d+\.\d+$/.test(config.version||'')&&/^\d+$/.test(config.phoneId||''));
 const auth=config=>({Authorization:'Bearer '+config.accessToken});
@@ -16,7 +17,8 @@ export function trustedMediaUrl(value){
   if(url.protocol!=='https:'||url.username||url.password||url.port||!(url.hostname==='lookaside.fbsbx.com'||url.hostname.endsWith('.fbcdn.net')||url.hostname==='lookaside.facebook.com'))fail(502,'عنوان مرفق غير موثوق');
   return url.toString();
 }
-export async function downloadMessageMedia(db,config,messageId,transport=fetch){
+export async function downloadMessageMedia(db,config,messageId,transport=fetch,key){
+  if(key)config=messageWhatsAppConfig(db,key,config,messageId);
   const existing=db.prepare('SELECT id FROM attachments WHERE message_id=?').get(messageId);if(existing)return existing;
   const message=db.prepare('SELECT m.*,c.contact_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?').get(messageId);
   if(!message || !message.media_id || message.direction!=='in')fail(404,'لا يوجد مرفق وارد');
@@ -45,11 +47,11 @@ export async function downloadMessageMedia(db,config,messageId,transport=fetch){
   db.prepare("UPDATE media_jobs SET status='done',error_code=NULL WHERE message_id=?").run(messageId);
   audit(db,null,'archived_media','attachment',id,{message_id:messageId});return {id};
 }
-export async function processMediaJob(db,config,transport=fetch){
+export async function processMediaJob(db,config,transport=fetch,key){
   if(!config.autoMedia || !mediaConfigured(config))return;
   const job=db.prepare("SELECT * FROM media_jobs WHERE status='pending' AND next_at<=? ORDER BY next_at LIMIT 1").get(now());if(!job)return;
   db.prepare("UPDATE media_jobs SET status='working',attempts=attempts+1 WHERE message_id=?").run(job.message_id);
-  try{await downloadMessageMedia(db,config,job.message_id,transport);}
+  try{await downloadMessageMedia(db,config,job.message_id,transport,key);}
   catch(error){const retry=job.attempts<2&&error.status!==413;db.prepare('UPDATE media_jobs SET status=?,next_at=?,error_code=? WHERE message_id=?').run(retry?'pending':'error',new Date(Date.now()+60000*(job.attempts+1)).toISOString(),error.status===413?'TOO_LARGE':'MEDIA_DOWNLOAD_FAILED',job.message_id);}
 }
 export async function syncTemplates(db,config,transport=fetch){

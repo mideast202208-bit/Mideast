@@ -75,7 +75,7 @@ export async function handleExtensions(context){
   const media=path.match(/^\/api\/messages\/([^/]+)\/media$/);
   if(media&&method==='POST'){
     const message=db.prepare('SELECT conversation_id FROM messages WHERE id=?').get(media[1]);if(!message)fail(404,'الرسالة غير متاحة');conversationFor(user,message.conversation_id);
-    const file=await downloadMessageMedia(db,config,media[1],transport);
+    const file=await downloadMessageMedia(db,config,media[1],transport,secretKey);
     conversationFor(user,message.conversation_id);audit(db,user,'requested_media','attachment',file.id);return respond(200,file);
   }
   const sendFile=path.match(/^\/api\/conversations\/([^/]+)\/files$/);

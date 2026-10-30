@@ -20,6 +20,9 @@ import { ensureOmniDefaults } from './omni-config.mjs';
 import { handleOmni,handleOmniPublic } from './omni-routes.mjs';
 import { processSocialEvents,sendSocialNext } from './social.mjs';
 import { processIntakeDelivery } from './intake.mjs';
+import {handleCommunication} from './communication.mjs';
+import {handleAssistant} from './assistant.mjs';
+import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
@@ -32,6 +35,7 @@ export function createApp(options = {}) {
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
   let config = effectiveConfig(db,env,secretKey);
+  if(config.phoneId)db.prepare("INSERT OR IGNORE INTO wa_thread_accounts SELECT v.id,?,MAX(m.created_at) FROM conversations v JOIN messages m ON m.conversation_id=v.id LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.direction='in' AND a.message_id IS NULL GROUP BY v.id").run(String(config.phoneId));
   const limits = new Map();
   let sending = false;
   const sendJson = (res,status,data) => {res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
@@ -80,19 +84,20 @@ export function createApp(options = {}) {
       if(path==='/health' && method==='GET'){sendJson(res,200,{status:'ok'});return;}
       if(path==='/webhooks/whatsapp'){
         if(method==='GET'){
-          if(!config.verifyToken || url.searchParams.get('hub.mode')!=='subscribe' || url.searchParams.get('hub.verify_token')!==config.verifyToken)fail(403,'Forbidden');
+          if(url.searchParams.get('hub.mode')!=='subscribe'||![config,...extraAccountConfigs(db,'whatsapp',secretKey)].some(c=>c.verifyToken&&url.searchParams.get('hub.verify_token')===c.verifyToken))fail(403,'Forbidden');
           res.writeHead(200,{'Content-Type':'text/plain'});res.end(url.searchParams.get('hub.challenge')||'');return;
         }
         if(method!=='POST')fail(405,'Method not allowed');
         const raw=await rawBody(req,2*1024*1024);
-        if(!validSignature(raw,req.headers['x-hub-signature-256'],config.appSecret))fail(403,'Invalid signature');
-        try{acceptWebhook(db,raw);}catch(error){if(error.status)throw error;fail(400,'Invalid webhook');}
+        const accepted=[config,...extraAccountConfigs(db,'whatsapp',secretKey).filter(c=>c.active&&c.verified_at&&c.subscribed)].filter(c=>validSignature(raw,req.headers['x-hub-signature-256'],c.appSecret));
+        if(!accepted.length)fail(403,'Invalid signature');
+        try{const payload=JSON.parse(raw);if(payload.object!=='whatsapp_business_account')fail(400,'Invalid webhook object');payload.entry=(payload.entry||[]).map(e=>({...e,changes:(e.changes||[]).filter(c=>accepted.some(a=>String(a.phoneId)===String(c.value?.metadata?.phone_number_id)))}));acceptWebhook(db,Buffer.from(JSON.stringify(payload)));}catch(error){if(error.status)throw error;fail(400,'Invalid webhook');}
         sendJson(res,200,{received:true});return;
       }
       if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
-        const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
+        const assets={'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
@@ -135,6 +140,8 @@ export function createApp(options = {}) {
         sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
+      if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
+      if(await handleAssistant({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleOmni({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleBusiness({db,user,path,method,req,res,jsonBody,sendJson,config}))return;
       if(await handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key:secretKey}))return;
@@ -335,7 +342,7 @@ export function createApp(options = {}) {
   server.requestTimeout=120000;
   const tick=async()=>{
     if(sending)return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch,secretKey);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch,secretKey);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   return {server,db,tick,get config(){return config;}};
 }

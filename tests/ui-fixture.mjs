@@ -10,11 +10,13 @@ export const fixture={
 export async function renderFixture(data=fixture){
   const elements=new Map();
   const element=selector=>{if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',className:'',open:false,addEventListener(){},showModal(){this.open=true;},close(){this.open=false;}});return elements.get(selector);};
-  const source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+  const stripImports=source=>source.replace(/^import .*$/gm,'');
+  const modules=['brand-icons.js','workspace.js'].map(file=>stripImports(readFileSync(new URL('../public/'+file,import.meta.url),'utf8')).replace(/export function /g,'function ')).join('\n');
+  const source=modules+'\n'+stripImports(readFileSync(new URL('../public/app.js',import.meta.url),'utf8'));
   const sandbox={console,Date,Intl,Map,Set,JSON,Math,Number,String,Array,Object,RegExp,Error,Promise,FormData,
     setInterval:()=>0,clearInterval(){},setTimeout:()=>0,
     document:{querySelector:element,addEventListener(){},activeElement:null},
-    fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:path.endsWith('/hub')?(data.hub||{}):data})};
-  const script=new vm.Script(`(async()=>{${source}\nreturn {page:(key)=>{page=key;render();return document.querySelector('#app').innerHTML;},studio:(entity)=>{studioEntity=entity;page='studio';render();return document.querySelector('#app').innerHTML;}};})()`);
+    fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:path.endsWith('/hub')?(data.hub||{}):path.endsWith('/communication')?data.communication:path.endsWith('/assistant')?data.assistant:data})};
+  const script=new vm.Script(`(async()=>{${source}\nreturn {pageAsync:async(key)=>{page=key;await load();return document.querySelector('#app').innerHTML;},page:(key)=>{page=key;render();return document.querySelector('#app').innerHTML;},studio:(entity)=>{studioEntity=entity;page='studio';render();return document.querySelector('#app').innerHTML;}};})()`);
   return script.runInNewContext(sandbox);
 }

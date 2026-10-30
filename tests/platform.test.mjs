@@ -136,7 +136,7 @@ test('Original Mid East platform integration and access boundaries',async t=>{
       await signedWebhook(payload);await app.tick();assert.equal(db.prepare("SELECT status FROM messages WHERE provider_id='out.1'").get().status,'read');
     });
     await t.test('expired service window rejects free-form text',async()=>{
-      db.prepare('UPDATE conversations SET last_inbound=? WHERE id=?').run(new Date(Date.now()-25*3600000).toISOString(),conversation.id);
+      const expiredAt=new Date(Date.now()-25*3600000).toISOString();db.prepare('UPDATE conversations SET last_inbound=? WHERE id=?').run(expiredAt,conversation.id);db.prepare('UPDATE wa_thread_accounts SET last_inbound=? WHERE conversation_id=?').run(expiredAt,conversation.id);
       assert.equal((await request('/api/conversations/'+conversation.id+'/messages','POST',{body:'Too late'},one)).status,409);
       assert.equal((await request('/api/conversations/'+conversation.id+'/messages','POST',{kind:'template',template_name:'test_approved',language:'ar'},one)).status,201);
       await app.tick();assert.equal(sendCount,2);

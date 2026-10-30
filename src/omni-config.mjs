@@ -1,6 +1,7 @@
 import { uid, now, fail, audit } from './service.mjs';
 import { encryptSecret, decryptSecret } from './integration-settings.mjs';
 import { hash, token } from './security.mjs';
+import {extraAccountConfig,accountLimits} from './accounts.mjs';
 
 export const channelNames={website:'الموقع',facebook:'فيسبوك',instagram:'إنستجرام',whatsapp:'واتساب',api:'API',manual:'يدوي'};
 export function ensureOmniDefaults(db){
@@ -44,8 +45,9 @@ export function intakeOwner(db){
   return db.prepare("SELECT * FROM users WHERE active=1 AND role IN('admin','manager','agent') AND id=?").get(chosen||'') ||
     (!chosen?db.prepare("SELECT * FROM users WHERE active=1 AND role='admin' ORDER BY created_at LIMIT 1").get():null);
 }
-export function channelConfig(db,channel,key){
+export function channelConfig(db,channel,key,accountId){
   const row=db.prepare('SELECT * FROM channel_accounts WHERE channel=?').get(channel);if(!row)return null;
+  if(accountId&&row.account_id!==String(accountId))return extraAccountConfig(db,channel,String(accountId),key);
   return {...row,accessToken:row.token_cipher?decryptSecret(row.token_cipher,key):'',appSecret:row.secret_cipher?decryptSecret(row.secret_cipher,key):'',verifyToken:row.verify_cipher?decryptSecret(row.verify_cipher,key):''};
 }
 export function channelSummary(db){
@@ -58,6 +60,10 @@ export function saveChannel(db,user,channel,input,key){
   for(const name of ['account_id','version','intake_user','profile_url'])if(input[name]!==undefined){
     const v=String(input[name]);
     if(name==='account_id'&&!/^\d{1,40}$/.test(v))fail(400,'معرف الحساب يجب أن يكون أرقامًا');
+    if(name==='account_id'&&v!==row.account_id){
+      if(db.prepare('SELECT 1 FROM communication_accounts WHERE channel=? AND account_id=?').get(channel,v))fail(409,'الحساب مضاف ضمن الحسابات الإضافية');
+      if(!row.account_id&&db.prepare('SELECT COUNT(*) n FROM communication_accounts WHERE channel=?').get(channel).n>=accountLimits[channel])fail(409,'وصلت للحد المسموح لهذه القناة');
+    }
     if(name==='version'&&!/^v\d+\.\d+$/.test(v))fail(400,'أدخل إصدار Graph المفعّل لتطبيقك');
     if(name==='intake_user'&&!db.prepare("SELECT id FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(v))fail(400,'موظف غير صالح');
     if(name==='profile_url'&&!/^https:\/\/(www\.)?(facebook|instagram)\.com\/[A-Za-z0-9._/-]+\/?$/.test(v))fail(400,'رابط صفحة غير صالح');

@@ -42,6 +42,8 @@ export function saveIntegration(db,user,input,key){
     if(input[name]===undefined || (secretNames.has(name)&&input[name]===''))continue;
     const value=text(input[name],name,secretNames.has(name)?4096:150);
     if(['phoneId','wabaId'].includes(name)&&!/^\d+$/.test(value))fail(400,'المعرّف يجب أن يكون أرقامًا');
+    if(name==='phoneId'&&db.prepare("SELECT 1 FROM communication_accounts WHERE channel='whatsapp' AND account_id=?").get(value))fail(409,'الرقم مضاف ضمن حسابات واتساب الإضافية');
+    if(name==='phoneId'&&db.prepare("SELECT COUNT(*) n FROM communication_accounts WHERE channel='whatsapp'").get().n>=10)fail(409,'وصلت للحد المسموح من أرقام واتساب');
     if(name==='version'&&!/^v\d+\.\d+$/.test(value))fail(400,'إصدار Graph غير صالح');
     if(name==='intakeUser'&&!db.prepare("SELECT id FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(value))fail(400,'اختر موظف استقبال نشطًا');
     cleaned.push(['wa.'+name,secretNames.has(name)?encryptSecret(value,key):value]);

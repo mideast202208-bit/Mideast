@@ -3,11 +3,14 @@ import { uid,now,fail,audit,getContact,runAutomations } from './service.mjs';
 import { hash,windowOpen,validSignature } from './security.mjs';
 import { channelConfig,intakeSettings,renderReply } from './omni-config.mjs';
 import { registrationLink } from './intake-links.mjs';
+import {extraAccountConfigs} from './accounts.mjs';
 
 export function acceptSocialWebhook(db,channel,raw,signature,key){
-  const config=channelConfig(db,channel,key);
-  if(!config?.active||!validSignature(raw,signature,config.appSecret))fail(403,'توقيع القناة غير صحيح');
+  const primary=channelConfig(db,channel,key),configs=[primary,...extraAccountConfigs(db,channel,key)].filter(c=>c?.active&&validSignature(raw,signature,c.appSecret));
+  if(!configs.length)fail(403,'توقيع القناة غير صحيح');
   let payload;try{payload=JSON.parse(raw);}catch{fail(400,'حدث غير صالح');}
+  if(!payload||!Array.isArray(payload.entry))fail(400,'حدث غير صالح');
+  payload.entry=(payload.entry||[]).filter(e=>configs.some(c=>c.account_id===String(e.id)));
   if(payload.object!==(channel==='facebook'?'page':'instagram'))fail(400,'نوع حدث غير صالح');
   const digest=hash(channel+':'+raw);
   db.prepare('INSERT OR IGNORE INTO social_events(id,channel,digest,payload,created_at) VALUES(?,?,?,?,?)').run(uid(),channel,digest,JSON.stringify(payload),now());
@@ -15,13 +18,13 @@ export function acceptSocialWebhook(db,channel,raw,signature,key){
 }
 export function processSocialEvents(db,key,origin){
   for(const event of db.prepare("SELECT * FROM social_events WHERE status='new' ORDER BY created_at LIMIT 10").all()){
-    const config=channelConfig(db,event.channel,key);
-    const owner=db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(config?.intake_user||'');
-    if(!config?.active||!owner||!config.account_id)continue;
+
     try{transaction(db,()=>{
       const payload=JSON.parse(event.payload);
       for(const entry of payload.entry||[]){
-        if(String(entry.id)!==config.account_id)continue;
+        const config=channelConfig(db,event.channel,key,String(entry.id));
+        const owner=db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(config?.intake_user||'');
+        if(!config?.active||!owner||String(entry.id)!==config.account_id)continue;
         for(const item of entry.messaging||[]){
           const message=item.message;
           if(!message?.mid||message.is_echo||!item.sender?.id||String(item.recipient?.id)!==config.account_id)continue;
@@ -43,7 +46,8 @@ export function processSocialEvents(db,key,origin){
           const body=String(message.text|| (message.attachments?.length?'[مرفق وارد: راجعه في القناة الأصلية]':'[رسالة غير نصية]')).slice(0,10000);
           db.prepare('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?)').run(uid(),thread.id,message.mid,'in',body,'received',null,received);
           db.prepare('UPDATE social_threads SET last_inbound=MAX(COALESCE(last_inbound,?),?) WHERE id=?').run(received,received,thread.id);
-          db.prepare('UPDATE channel_accounts SET last_event_at=? WHERE channel=?').run(now(),event.channel);
+          db.prepare('UPDATE channel_accounts SET last_event_at=? WHERE channel=? AND account_id=?').run(now(),event.channel,config.account_id);
+          db.prepare('UPDATE communication_accounts SET last_event_at=? WHERE channel=? AND account_id=?').run(now(),event.channel,config.account_id);
           if(first&&intakeSettings(db).social_auto_reply){
             const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
             const reply=renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:registrationLink(thread.contact_id,event.channel,key,origin)});
@@ -63,15 +67,15 @@ export function queueSocialReply(db,user,id,body){
   const thread=socialThread(db,user,id);
   if(!windowOpen(thread.last_inbound))fail(409,'نافذة الرد انتهت؛ افتح القناة الأصلية لمراجعة الخيارات المتاحة');
   if(typeof body!=='string'||!body.trim()||body.length>1000)fail(400,'اكتب رسالة لا تزيد عن 1000 حرف');
-  const account=db.prepare('SELECT active,token_cipher,version FROM channel_accounts WHERE channel=?').get(thread.channel);
-  if(!account?.active||!account.token_cipher||!account.version)fail(409,'ربط القناة غير مكتمل');
+  const account=db.prepare('SELECT active,token_cipher FROM channel_accounts WHERE channel=? AND account_id=?').get(thread.channel,thread.account_id)||db.prepare('SELECT active,configuration_cipher AS token_cipher FROM communication_accounts WHERE channel=? AND account_id=?').get(thread.channel,thread.account_id);
+  if(!account?.active||!account.token_cipher)fail(409,'ربط القناة غير مكتمل');
   const messageId=uid();db.prepare('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?)').run(messageId,id,null,'out',body.trim(),'queued',null,now());
   audit(db,user,'queued','social_message',messageId);return {id:messageId,status:'queued'};
 }
 export async function sendSocialNext(db,key,transport=fetch){
   const message=db.prepare("SELECT m.*,t.channel,t.account_id,t.sender_id,t.last_inbound FROM social_messages m JOIN social_threads t ON t.id=m.thread_id WHERE m.status='queued' AND m.direction='out' ORDER BY m.created_at LIMIT 1").get();
   if(!message)return;
-  const config=channelConfig(db,message.channel,key);
+  const config=channelConfig(db,message.channel,key,message.account_id);
   if(!config?.active||!config.accessToken||!/^v\d+\.\d+$/.test(config.version)||!config.verified_at){
     db.prepare("UPDATE social_messages SET status='blocked',error_code='CHANNEL_NOT_VERIFIED' WHERE id=?").run(message.id);return;
   }
