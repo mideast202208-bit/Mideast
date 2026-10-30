@@ -5,3 +5,8 @@ export const services=[
  'تصديق المستندات','استقبال من المطار وحجز فندقي','استشارة وتواصل مع الفريق'
 ];
 export const nonAcademicServices=['تصديق المستندات','استقبال من المطار وحجز فندقي','استشارة وتواصل مع الفريق'];
+export function requestedService(params){
+ const direct=params.get('interest')||params.get('requested_service');if(direct)return direct;
+ const legacy=params.get('service')||'';
+ return ({'بكالوريوس':services[0],'ماجستير':services[9],'دكتوراه':services[9],'دراسات عليا':services[9],'تصديق مستندات':'تصديق المستندات','استقبال وسكن':'استقبال من المطار وحجز فندقي','تعديل ترشيح':'تعديل ترشيح - جامعي'})[legacy]||legacy;
+}

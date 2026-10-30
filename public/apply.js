@@ -1,4 +1,4 @@
-import {services,nonAcademicServices} from './services.js';
+import {services,nonAcademicServices,requestedService} from './services.js';
 const form=document.querySelector('#application-form'),steps=[...form.querySelectorAll('[data-step]')],error=document.querySelector('#form-error');
 let selectedFiles=[];
 let current=0,busy=false,requestKey=crypto.randomUUID().replaceAll('-','');
@@ -7,7 +7,7 @@ const initialParams=new URLSearchParams(location.search);
 if(['بكالوريوس','ماجستير','دكتوراه'].includes(initialParams.get('service')))form.elements.level.value=initialParams.get('service');
 const serviceSelect=form.elements.requested_service;
 for(const label of ['طلب دراسة أو استشارة عامة',...services]){const option=document.createElement('option');option.value=label==='طلب دراسة أو استشارة عامة'?'':label;option.textContent=label;serviceSelect.append(option);}
-const requested=initialParams.get('interest')||initialParams.get('requested_service')||'';
+const requested=requestedService(initialParams);
 if(requested&&requested.length<=200){if(!services.includes(requested)){const option=document.createElement('option');option.value=requested;option.textContent=requested;serviceSelect.append(option);}serviceSelect.value=requested;}
 function updateService(){
  const nonAcademic=nonAcademicServices.includes(serviceSelect.value);

@@ -4,7 +4,15 @@
   if(!hosts.includes(location.hostname))return;
   const target=origin+'/apply';let pending=false;
   const legacyServices={'/regreg4':'تقديم طلب التحاق - جامعي','/postgradeaddmission':'تقديم طلب التحاق - دراسات عليا','/regsre3':'تحويل من الخارج','/sersw':'تعديل ترشيح - جامعي','/resres':'تصديق المستندات','/regre2':'استقبال من المطار وحجز فندقي'};
-  const pathService=legacyServices[location.pathname.replace(/\/$/,'')];
+  let pathService=legacyServices[location.pathname.replace(/\/$/,'')];
+  try{
+    if(pathService)sessionStorage.setItem('me-crm-service-context',JSON.stringify({service:pathService,at:Date.now()}));
+    else if(location.pathname.replace(/\/$/,'')==='/registration'){
+      const saved=JSON.parse(sessionStorage.getItem('me-crm-service-context')||'null');sessionStorage.removeItem('me-crm-service-context');
+      const explicit=new URLSearchParams(location.search);
+      if(!explicit.get('service')&&!explicit.get('interest')&&!explicit.get('requested_service')&&saved&&Date.now()-saved.at>=0&&Date.now()-saved.at<120000)pathService=saved.service;
+    }
+  }catch{}
   function frameUrl(value,popup){
     const old=new URL(value,location.href),query=new URLSearchParams(old.search);
     if(!query.has('source'))query.set('source',new URLSearchParams(location.search).get('source')||'website');

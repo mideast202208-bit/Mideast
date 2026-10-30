@@ -5,7 +5,7 @@ import {uid,now} from '../src/service.mjs';
 import {ensureOmniDefaults} from '../src/omni-config.mjs';
 import {installEducationWorkspace} from '../src/education.mjs';
 import {createRegistration,listRegistrations,receiptByToken,registrationFiles} from '../src/intake.mjs';
-import {services,nonAcademicServices} from '../public/services.js';
+import {services,nonAcademicServices,requestedService} from '../public/services.js';
 
 test('every published service persists its identity in the customer request, receipt and protected files',()=>{
  const db=openDatabase(':memory:'),key=Buffer.alloc(32,12),owner={id:uid(),role:'admin'};
@@ -43,4 +43,11 @@ test('existing education field options are extended without removing custom opti
   const options=JSON.parse(db.prepare('SELECT options FROM app_fields WHERE id=?').get(field.id).options);
   assert.ok(options.includes('مخصص'));assert.ok(options.includes('غير دراسي'));
  }finally{db.close();}
+});
+
+test('legacy registration parameters retain the requested service while explicit interests take precedence',()=>{
+ for(const [legacy,expected] of [['تصديق مستندات','تصديق المستندات'],['استقبال وسكن','استقبال من المطار وحجز فندقي'],['تعديل ترشيح','تعديل ترشيح - جامعي'],['بكالوريوس',services[0]],['دراسات عليا',services[9]],['تحويل من الخارج','تحويل من الخارج']]){
+  const params=new URLSearchParams({service:legacy});assert.equal(requestedService(params),expected);
+  params.set('interest','خدمة محددة');assert.equal(requestedService(params),'خدمة محددة');
+ }
 });
