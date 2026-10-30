@@ -1,0 +1,34 @@
+Mid East original platform 0.3 — validation on 2026-10-29
+Runtime: Node.js v24.22.1; built-in node:sqlite.
+
+Executed:
+- npm test: 46 tests, 46 passed, 0 failed.
+- node --check: final syntax check recorded at packaging.
+- HTTP tests used a real ephemeral local server and in-memory SQLite.
+- WhatsApp transport was mocked; no message was sent to Meta.
+- Backup and restore used a real temporary SQLite file and subprocesses.
+- Restore test verified session revocation and refusal to overwrite an existing target.
+- Encrypted key sidecars were restored and used to decrypt saved credentials.
+- MFA TOTP was compared against a reference test vector; replay was rejected.
+- Custom app relations, form ordering, role isolation and delayed actions were tested.
+- All application pages rendered using the actual frontend source in a DOM fixture.
+- App names and renamed sales stages were tested for HTML escaping.
+- Real browser visual checks: login screen and a read-only Studio snapshot rendered
+  from the actual frontend with synthetic data. No production credentials entered.
+
+Not executed:
+- Full authenticated browser interaction QA, mobile and accessibility audit.
+- Live WhatsApp / Meta permissions / template approval.
+- Docker build, Caddy HTTPS, public hosting, DNS configuration.
+- Load, penetration, infrastructure backup scheduling and offsite restore testing.
+
+No customer data, real passwords, real provider credentials or runtime database are
+included in this source delivery. Test credentials are synthetic fixtures only.
+
+v0.3 additions verified:
+- Quote ownership, state transitions, approval reference, financial conversion and idempotency.
+- Printable quote/invoice access and HTML escaping.
+- Contact notes follow reassignment.
+- Education metadata setup is owner-only, idempotent and does not create student records.
+- Operations report does not claim public deployment or live WhatsApp acceptance.
+- install-server.sh passed shell syntax checking; no external installation was attempted.

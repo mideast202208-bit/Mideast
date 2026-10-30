@@ -1,0 +1,30 @@
+# Provisioning template only. Applying this creates paid hosting and a persistent disk.
+# Review the provider's current quote before deploying. No service has been created.
+services:
+  - type: web
+    name: mid-east-platform
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    disk:
+      name: mid-east-data
+      mountPath: /app/data
+      sizeGB: 10
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DB_PATH
+        value: /app/data/mid-east.sqlite
+      - key: KEY_PATH
+        value: /app/data/server.key
+      - key: BOOTSTRAP_TOKEN
+        generateValue: true
+      - key: BACKUP_INTERVAL_HOURS
+        value: "24"
+      - key: BACKUP_DIR
+        value: /app/data/backups

@@ -1,0 +1,10 @@
+{
+    email {$ACME_EMAIL}
+}
+{$CRM_DOMAIN} {
+    encode gzip
+    request_body {
+        max_size 15MB
+    }
+    reverse_proxy app:3000
+}
