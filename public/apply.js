@@ -11,6 +11,10 @@ const requested=requestedService(initialParams);
 if(requested&&requested.length<=200){if(!services.includes(requested)){const option=document.createElement('option');option.value=requested;option.textContent=requested;serviceSelect.append(option);}serviceSelect.value=requested;}
 function updateService(){
  const nonAcademic=nonAcademicServices.includes(serviceSelect.value);
+ const intro=steps[0];intro.querySelector('.portal-kicker').textContent=nonAcademic?'خدمتك في مكان واحد':'الدراسة اللي بتطمح لها';
+ intro.querySelector('h2').textContent=nonAcademic?'نرتّب طلبك.':'نبدأ من هدفك.';
+ intro.querySelector('.portal-sub').textContent=nonAcademic?'اختار الخدمة اللي محتاجها، وفريقنا هيراجع التفاصيل معاك.':'مش لازم تكون حددت الجامعة؛ نقدر نساعدك تختار.';
+ form.elements.level.closest('label').hidden=nonAcademic;
  if(nonAcademic)form.elements.level.value='غير دراسي';
  else if(form.elements.level.value==='غير دراسي')form.elements.level.value=/دراسات عليا/.test(serviceSelect.value)?'ماجستير':'بكالوريوس';
  for(const name of ['certificate','academic_year','university','faculty']){const input=form.elements[name];input.closest('label').hidden=nonAcademic;input.required=!nonAcademic&&['certificate','academic_year'].includes(name);}
