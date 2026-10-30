@@ -79,3 +79,21 @@ export function reorderFields(db,user,entity,ids){
   if(ids.length!==all.length||ids.some(id=>!all.includes(id)))fail(400,'يجب إرسال كل حقول النموذج مرة واحدة');
   transaction(db,()=>{ids.forEach((id,index)=>db.prepare(`UPDATE ${table} SET position=? WHERE id=?`).run(index,id));audit(db,user,'reordered','form',entity);});
 }
+
+export function reassignContactRecords(db,contactId,newOwner){
+  const leadIds=new Set(db.prepare('SELECT id FROM leads WHERE contact_id=?').all(contactId).map(r=>r.id));
+  const fields=db.prepare("SELECT app_id,field_key,relation_target FROM app_fields WHERE type='relation'").all();
+  const records=db.prepare('SELECT id,app_id,data FROM app_records').all(),linked=new Set();
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const record of records){
+      if(linked.has(record.id))continue;
+      const values=JSON.parse(record.data);
+      if(fields.some(f=>f.app_id===record.app_id&&((f.relation_target==='contact'&&values[f.field_key]===contactId)||(f.relation_target==='lead'&&leadIds.has(values[f.field_key]))||linked.has(values[f.field_key])))){
+        linked.add(record.id);changed=true;
+      }
+    }
+  }
+  for(const id of linked)db.prepare('UPDATE app_records SET owner_id=?,updated_at=? WHERE id=?').run(newOwner,now(),id);
+}

@@ -120,6 +120,10 @@ export async function sendNext(db, config, transport = fetch) {
     JOIN conversations v ON v.id=m.conversation_id JOIN contacts c ON c.id=v.contact_id
     WHERE m.status='queued' AND m.direction='out' ORDER BY m.created_at LIMIT 1`).get();
   if (!message) return;
+  if(db.prepare('SELECT id FROM intake_registrations WHERE message_id=?').get(message.id)){
+    const consent=db.prepare('SELECT p.whatsapp_opt_in FROM contact_preferences p JOIN conversations c ON c.contact_id=p.contact_id WHERE c.id=?').get(message.conversation_id);
+    if(!consent?.whatsapp_opt_in){db.prepare("UPDATE messages SET status='failed',error_code='CONSENT_REVOKED' WHERE id=?").run(message.id);return;}
+  }
   if (message.kind !== 'template' && !windowOpen(message.last_inbound)) {
     db.prepare("UPDATE messages SET status='failed',error_code='WINDOW_EXPIRED' WHERE id=?").run(message.id); return;
   }

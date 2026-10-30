@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
 export async function createSnapshot(db,key,directory){
-  const needsKey=db.prepare("SELECT COUNT(*) n FROM settings WHERE key IN('wa.accessToken','wa.appSecret','wa.verifyToken')").get().n || db.prepare('SELECT COUNT(*) n FROM login_factors').get().n;
+  const needsKey=db.prepare("SELECT COUNT(*) n FROM settings WHERE key IN('wa.accessToken','wa.appSecret','wa.verifyToken')").get().n || db.prepare('SELECT COUNT(*) n FROM login_factors').get().n || db.prepare('SELECT COUNT(*) n FROM intake_registrations').get().n || db.prepare('SELECT COUNT(*) n FROM channel_accounts WHERE token_cipher IS NOT NULL OR secret_cipher IS NOT NULL OR verify_cipher IS NOT NULL').get().n;
   if(needsKey&&(!key||key.length!==32))throw new Error('Encryption key is required for a recoverable backup');
   if(key&&key.length!==32)throw new Error('Invalid encryption key');
   const folder=resolve(directory);mkdirSync(folder,{recursive:true,mode:0o700});

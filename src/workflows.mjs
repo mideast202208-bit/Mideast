@@ -1,3 +1,4 @@
+import { reassignContactRecords } from './studio.mjs';
 import { transaction } from './db.mjs';
 import { uid, now, fail, audit } from './service.mjs';
 
@@ -45,6 +46,7 @@ export function processWorkflowJobs(db){
         if(action.type==='assign'){
           if(!db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(action.user_id))throw new Error('Inactive assignee');
           assigned=action.user_id;db.prepare('UPDATE contacts SET owner_id=?,updated_at=? WHERE id=?').run(assigned,now(),contactId);
+          reassignContactRecords(db,contactId,assigned);
           for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(assigned,contactId);
         }else if(action.type==='task'){
           db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(uid(),contactId,lead?.id||null,action.title,new Date(Date.now()+(action.due_hours??24)*3600000).toISOString(),'open',assigned,now());

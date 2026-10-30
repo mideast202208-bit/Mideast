@@ -14,7 +14,12 @@ import { processMediaJob } from './media.mjs';
 import { verifyFactor, handleMfa } from './mfa.mjs';
 import { bootstrapOwner } from './bootstrap.mjs';
 import { maybeSnapshot } from './backups.mjs';
+import { reassignContactRecords } from './studio.mjs';
 import { handleBusiness } from './business-routes.mjs';
+import { ensureOmniDefaults } from './omni-config.mjs';
+import { handleOmni,handleOmniPublic } from './omni-routes.mjs';
+import { processSocialEvents,sendSocialNext } from './social.mjs';
+import { processIntakeDelivery } from './intake.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
@@ -25,6 +30,7 @@ export function createApp(options = {}) {
   const origin = env.PUBLIC_ORIGIN || env.RENDER_EXTERNAL_URL || 'http://127.0.0.1:3000';
   if (production && !origin.startsWith('https://')) throw new Error('Production requires HTTPS PUBLIC_ORIGIN');
   const secretKey=options.secretKey || loadServerKey(env);
+  ensureOmniDefaults(db);
   let config = effectiveConfig(db,env,secretKey);
   const limits = new Map();
   let sending = false;
@@ -83,10 +89,15 @@ export function createApp(options = {}) {
         try{acceptWebhook(db,raw);}catch(error){if(error.status)throw error;fail(400,'Invalid webhook');}
         sendJson(res,200,{received:true});return;
       }
+      if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
-        const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8']};
+        const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
+        if(path==='/apply'||path==='/registration'){
+          res.removeHeader('X-Frame-Options');
+          res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors https://mideastedu-eg.com https://www.mideastedu-eg.com; base-uri 'none'; form-action 'self'");
+        }
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-cache'});res.end(readFileSync(join(publicDir,asset[0])));return;
       }
       const write=!['GET','HEAD'].includes(method);
@@ -124,6 +135,7 @@ export function createApp(options = {}) {
         sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
+      if(await handleOmni({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleBusiness({db,user,path,method,req,res,jsonBody,sendJson,config}))return;
       if(await handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key:secretKey}))return;
       if(await handleExtensions({db,user,path,method,req,res,jsonBody,sendJson,config,secretKey,transport:options.transport||fetch,conversationFor}))return;
@@ -152,6 +164,7 @@ export function createApp(options = {}) {
         transaction(db,()=>{
           db.prepare('UPDATE contacts SET name=?,phone=?,email=?,owner_id=?,custom=?,updated_at=? WHERE id=?').run(name,phone,email,newOwner,custom,now(),current.id);
           for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(newOwner,current.id);
+          reassignContactRecords(db,current.id,newOwner);
           audit(db,user,'updated','contact',current.id,{owner_id:newOwner});
         });sendJson(res,200,{ok:true});return;
       }
@@ -322,7 +335,7 @@ export function createApp(options = {}) {
   server.requestTimeout=30000;
   const tick=async()=>{
     if(sending)return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config);processWorkflowJobs(db);await sendNext(db,config,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   return {server,db,tick,get config(){return config;}};
 }

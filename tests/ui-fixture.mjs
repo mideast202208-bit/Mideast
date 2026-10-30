@@ -14,7 +14,7 @@ export async function renderFixture(data=fixture){
   const sandbox={console,Date,Intl,Map,Set,JSON,Math,Number,String,Array,Object,RegExp,Error,Promise,FormData,
     setInterval:()=>0,clearInterval(){},setTimeout:()=>0,
     document:{querySelector:element,addEventListener(){},activeElement:null},
-    fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:data})};
+    fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:path.endsWith('/hub')?(data.hub||{}):data})};
   const script=new vm.Script(`(async()=>{${source}\nreturn {page:(key)=>{page=key;render();return document.querySelector('#app').innerHTML;},studio:(entity)=>{studioEntity=entity;page='studio';render();return document.querySelector('#app').innerHTML;}};})()`);
   return script.runInNewContext(sandbox);
 }
