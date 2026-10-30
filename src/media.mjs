@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { uid, now, fail, audit } from './service.mjs';
+import { intakeSettings } from './omni-config.mjs';
 
 export const mediaConfigured=config=>Boolean(config.accessToken&&/^v\d+\.\d+$/.test(config.version||'')&&/^\d+$/.test(config.phoneId||''));
 const auth=config=>({Authorization:'Bearer '+config.accessToken});
@@ -67,6 +68,20 @@ export async function syncTemplates(db,config,transport=fetch){
     pages++;
   }while(after&&pages<20);
   return {count,has_more:Boolean(after)};
+}
+export async function maybeSyncTemplates(db,config,transport=fetch){
+  if(!mediaConfigured(config)||!/^\d+$/.test(config.wabaId||'')||!intakeSettings(db).welcome_template)return;
+  const next=Number(db.prepare("SELECT value FROM settings WHERE key='wa.template_sync_next'").get()?.value||0);
+  if(next>Date.now())return;
+  db.prepare("INSERT INTO settings VALUES('wa.template_sync_next',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(Date.now()+15*60000));
+  try{
+    const result=await syncTemplates(db,config,transport);
+    audit(db,null,'synced_automatically','templates','whatsapp',{count:result.count});
+    return result;
+  }catch{
+    audit(db,null,'sync_failed','templates','whatsapp',{code:'META_TEMPLATE_SYNC_FAILED'});
+    return {error:true};
+  }
 }
 export async function uploadMedia(config,file,transport=fetch){
   const allowed=['image/jpeg','image/png','image/webp','application/pdf','audio/ogg','audio/mpeg','audio/mp4','video/mp4','text/plain'];

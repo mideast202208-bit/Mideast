@@ -10,7 +10,7 @@ import { acceptWebhook, processWebhookQueue, queueMessage, sendNext } from './wh
 import { loadServerKey, effectiveConfig } from './integration-settings.mjs';
 import { handleExtensions } from './extensions.mjs';
 import { processWorkflowJobs, validateWorkflow } from './workflows.mjs';
-import { processMediaJob } from './media.mjs';
+import { processMediaJob, maybeSyncTemplates } from './media.mjs';
 import { verifyFactor, handleMfa } from './mfa.mjs';
 import { bootstrapOwner } from './bootstrap.mjs';
 import { maybeSnapshot } from './backups.mjs';
@@ -335,7 +335,7 @@ export function createApp(options = {}) {
   server.requestTimeout=30000;
   const tick=async()=>{
     if(sending)return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   return {server,db,tick,get config(){return config;}};
 }

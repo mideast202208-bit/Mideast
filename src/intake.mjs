@@ -111,6 +111,9 @@ export async function processIntakeDelivery(db,config,key,origin){
   if(!preference?.whatsapp_opt_in){block('CONSENT_REQUIRED');return;}
   const settings=intakeSettings(db),template=db.prepare('SELECT * FROM wa_templates WHERE name=? AND language=?').get(settings.welcome_template||'',settings.welcome_language||'ar');
   if(!config.accessToken||!config.phoneId||!config.version){block('WHATSAPP_NOT_CONFIGURED');return;}
+  if(template?.status==='PENDING'){
+    db.prepare("UPDATE intake_registrations SET delivery_reason='TEMPLATE_REVIEW_PENDING' WHERE id=?").run(row.id);return;
+  }
   if(!template||template.status!=='APPROVED'){block('APPROVED_TEMPLATE_REQUIRED');return;}
   const components=JSON.parse(template.components),body=components.find(c=>c.type==='BODY');
   if(components.some(c=>c.type==='HEADER'&&['IMAGE','VIDEO','DOCUMENT'].includes(c.format))||components.some(c=>c.type==='BUTTONS'&&c.buttons?.some(b=>/\{\{/.test(b.url||'')))){block('TEMPLATE_NEEDS_OTHER_COMPONENTS');return;}
