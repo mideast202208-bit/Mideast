@@ -92,7 +92,7 @@ export function createApp(options = {}) {
       if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
-        const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
+        const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');

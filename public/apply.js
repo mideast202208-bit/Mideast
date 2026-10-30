@@ -1,9 +1,22 @@
+import {services,nonAcademicServices} from './services.js';
 const form=document.querySelector('#application-form'),steps=[...form.querySelectorAll('[data-step]')],error=document.querySelector('#form-error');
 let selectedFiles=[];
 let current=0,busy=false,requestKey=crypto.randomUUID().replaceAll('-','');
 form.elements.academic_year.value=String(new Date().getFullYear());
 const initialParams=new URLSearchParams(location.search);
 if(['بكالوريوس','ماجستير','دكتوراه'].includes(initialParams.get('service')))form.elements.level.value=initialParams.get('service');
+const serviceSelect=form.elements.requested_service;
+for(const label of ['طلب دراسة أو استشارة عامة',...services]){const option=document.createElement('option');option.value=label==='طلب دراسة أو استشارة عامة'?'':label;option.textContent=label;serviceSelect.append(option);}
+const requested=initialParams.get('interest')||initialParams.get('requested_service')||'';
+if(requested&&requested.length<=200){if(!services.includes(requested)){const option=document.createElement('option');option.value=requested;option.textContent=requested;serviceSelect.append(option);}serviceSelect.value=requested;}
+function updateService(){
+ const nonAcademic=nonAcademicServices.includes(serviceSelect.value);
+ if(nonAcademic)form.elements.level.value='غير دراسي';
+ else if(form.elements.level.value==='غير دراسي')form.elements.level.value=/دراسات عليا/.test(serviceSelect.value)?'ماجستير':'بكالوريوس';
+ for(const name of ['certificate','academic_year','university','faculty']){const input=form.elements[name];input.closest('label').hidden=nonAcademic;input.required=!nonAcademic&&['certificate','academic_year'].includes(name);}
+}
+if(/دراسات عليا/.test(requested))form.elements.level.value='ماجستير';
+serviceSelect.addEventListener('change',updateService);form.elements.level.addEventListener('change',()=>{if(form.elements.level.value==='غير دراسي'&&!nonAcademicServices.includes(serviceSelect.value))serviceSelect.value='استشارة وتواصل مع الفريق';updateService();});updateService();
 if(initialParams.get('embed')==='1'){
   document.body.classList.add('embedded');
   if(window.parent!==window){
@@ -23,7 +36,7 @@ function showStep(index){
   document.querySelector('#send-application').hidden=index!==3;error.textContent='';
   if(index===3){
     const target=document.querySelector('#review-data');target.replaceChildren();
-    for(const [label,value] of [['الطالب',form.elements.name.value],['رقم التواصل',form.elements.phone.value],['الدراسة',form.elements.level.value+' · '+form.elements.certificate.value],['سنة التقديم',form.elements.academic_year.value],['المرفقات',String(selectedFiles.length)+' ملف']]){
+    for(const [label,value] of [['الخدمة',serviceSelect.value||'طلب دراسة أو استشارة عامة'],['الطالب',form.elements.name.value],['رقم التواصل',form.elements.phone.value],['الدراسة',form.elements.level.value+' · '+form.elements.certificate.value],['سنة التقديم',form.elements.academic_year.value],['المرفقات',String(selectedFiles.length)+' ملف']]){
       const row=document.createElement('div'),b=document.createElement('b'),span=document.createElement('span');b.textContent=label;span.textContent=value;row.append(b,span);target.append(row);
     }
   }

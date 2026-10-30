@@ -3,22 +3,45 @@
   const origin=__CRM_ORIGIN__,hosts=['mideastedu-eg.com','www.mideastedu-eg.com'];
   if(!hosts.includes(location.hostname))return;
   const target=origin+'/apply';let pending=false;
+  const legacyServices={'/regreg4':'تقديم طلب التحاق - جامعي','/postgradeaddmission':'تقديم طلب التحاق - دراسات عليا','/regsre3':'تحويل من الخارج','/sersw':'تعديل ترشيح - جامعي','/resres':'تصديق المستندات','/regre2':'استقبال من المطار وحجز فندقي'};
+  const pathService=legacyServices[location.pathname.replace(/\/$/,'')];
   function frameUrl(value,popup){
     const old=new URL(value,location.href),query=new URLSearchParams(old.search);
     if(!query.has('source'))query.set('source',new URLSearchParams(location.search).get('source')||'website');
+    if(!query.has('interest')&&pathService)query.set('interest',pathService);
     if(popup)query.set('utm_campaign','website_popup');query.set('embed','1');return target+'?'+query;
   }
   function connect(){
     pending=false;
     document.querySelectorAll('a[href]').forEach(a=>{
       try{const raw=a.getAttribute('href'),url=new URL(a.href,location.href);
+        const legacy=legacyServices[url.pathname.replace(/\/$/,'')];
+        if(legacy&&url.hostname===location.hostname){url.searchParams.set('interest',legacy);url.searchParams.set('source',new URLSearchParams(location.search).get('source')||'website');a.href=target+'?'+url.searchParams;}
         if(raw&&!raw.startsWith('#')&&url.hostname===location.hostname&&url.pathname.replace(/\/$/,'')==='/registration'){
           if(!url.searchParams.has('source'))url.searchParams.set('source',new URLSearchParams(location.search).get('source')||'website');
           a.href=target+'?'+url.searchParams;
         }
         const destination=new URL(a.href,location.href);
-        if(destination.origin===origin&&destination.pathname==='/apply'&&!a.closest('#me-quick-contact'))a.dataset.mideastPopup='1';
+        if(destination.origin===origin&&destination.pathname==='/apply'){
+          if(!destination.searchParams.has('interest')){
+            const label=a.textContent||'';let service='';
+            if(/تحويل من الخارج/.test(label))service='تحويل من الخارج';
+            else if(/دراسات|درسات/.test(label))service='تقديم طلب التحاق - دراسات عليا';
+            else if(destination.searchParams.get('service')==='بكالوريوس')service='تقديم طلب التحاق - جامعي';
+            if(service){destination.searchParams.set('interest',service);a.href=destination.href;}
+          }
+          if(!a.closest('#me-quick-contact'))a.dataset.mideastPopup='1';
+        }
       }catch{}
+    });
+    document.querySelectorAll('form').forEach(form=>{
+      if(form.getAttribute('role')==='search'||form.querySelector('input[type="search"]'))return;
+      const contactForm=form.querySelector('input[type="email"],input[type="tel"]')&&form.querySelector('textarea');
+      if(!pathService&&!contactForm)return;
+      const frame=document.createElement('iframe'),box=document.createElement('section'),note=document.createElement('p');
+      const url=new URL(target);url.searchParams.set('interest',pathService||'استشارة وتواصل مع الفريق');url.searchParams.set('source',new URLSearchParams(location.search).get('source')||'website');
+      frame.src=frameUrl(url.href,false);frame.title='التسجيل مع ميد إيست';frame.dataset.mideastPlatform='1';frame.style.cssText='width:100%;border:0;min-height:680px';
+      note.textContent='طلبك ومستنداتك تُسجل في ملف العميل لدى فريق ميد إيست.';box.append(note,frame);form.replaceWith(box);
     });
     document.querySelectorAll('iframe[src]').forEach(frame=>{
       try{const url=new URL(frame.src),popup=!!frame.closest('#me-quick-contact');

@@ -20,14 +20,16 @@ export function cleanIntake(input){
   const email=text(input.email||'','البريد',254,false).toLowerCase();
   if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'بريد غير صالح');
   const source=['website','facebook','instagram','whatsapp','api'].includes(input.source)?input.source:'website';
-  const certificate=text(input.certificate,'نوع الشهادة',80);
+  const nonAcademic=input.level==='غير دراسي';
+  const requested_service=text(input.requested_service||'','الخدمة المطلوبة',200,false);
+  const certificate=text(input.certificate||(nonAcademic?'أخرى':''),'نوع الشهادة',80);
   if(!['ثانوي سوداني','IGCSE','دبلومة أمريكية','شهادة عربية','أخرى'].includes(certificate))fail(400,'شهادة غير متاحة');
-  const academic_year=text(input.academic_year,'سنة التقديم',9);
+  const academic_year=text(input.academic_year||(nonAcademic?String(new Date().getFullYear()):''),'سنة التقديم',9);
   if(!/^\d{4}(?:\/\d{4})?$/.test(academic_year))fail(400,'أدخل سنة تقديم صحيحة');
-  const level=input.level||'بكالوريوس';if(!['بكالوريوس','ماجستير','دكتوراه'].includes(level))fail(400,'مرحلة دراسية غير صالحة');
+  const level=input.level||'بكالوريوس';if(!['بكالوريوس','ماجستير','دكتوراه','غير دراسي'].includes(level))fail(400,'مرحلة دراسية غير صالحة');
   const result={name,phone,email,source,certificate,academic_year,level,nationality:text(input.nationality||'','الجنسية',80,false),university:text(input.university||'أحتاج استشارة','الجامعة',160),faculty:text(input.faculty||'أحتاج استشارة','التخصص',160),notes:text(input.notes||'','الملاحظات',2000,false),campaign:text(input.campaign||'','الحملة',150,false),whatsapp_opt_in:input.whatsapp_opt_in===true};
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(input.request_key||''))fail(400,'مفتاح الطلب غير صالح؛ أعد فتح النموذج');
-  return {...result,request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{})};
+  return {...result,...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{})};
 }
 function intakeFiles(files=[]){
   if(!Array.isArray(files)||files.length>intakeLimits.maxFiles)fail(400,'بحد أقصى 12 مستندًا');
@@ -44,7 +46,7 @@ function intakeFiles(files=[]){
   });
 }
 export function registrationFile(record,input){
-  const rows=[['رقم التسجيل',record.reference],['اسم الطالب',input.name],['الهاتف',input.phone],['البريد',input.email||'غير مذكور'],['المصدر',channelNames[input.source]||input.source],['الجنسية',input.nationality],['الشهادة',input.certificate],['سنة التقديم',input.academic_year],['المرحلة',input.level],['الجامعة المطلوبة',input.university],['التخصص المطلوب',input.faculty]];
+  const rows=[...(input.requested_service?[['الخدمة المطلوبة',input.requested_service]]:[]),['رقم التسجيل',record.reference],['اسم الطالب',input.name],['الهاتف',input.phone],['البريد',input.email||'غير مذكور'],['المصدر',channelNames[input.source]||input.source],['الجنسية',input.nationality],['الشهادة',input.certificate],['سنة التقديم',input.academic_year],['المرحلة',input.level],['الجامعة المطلوبة',input.university],['التخصص المطلوب',input.faculty]];
   return '<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Middle East · '+esc(record.reference)+'</title><style>body{font:16px/1.8 Tahoma,Arial;max-width:850px;margin:40px auto;padding:25px;color:#132b39}header{border-bottom:4px solid #189d8a;padding:20px 0}small{color:#5e7480}dl{display:grid;grid-template-columns:180px 1fr}dt,dd{margin:0;padding:12px;border-bottom:1px solid #eee}dt{font-weight:bold}footer{background:#edf6f4;padding:20px;margin-top:25px}button{background:#102e39;color:white;padding:14px;border:0;border-radius:8px}@media print{button{display:none}body{margin:0}}</style><header><small>MIDDLE EAST · STUDENT SERVICES</small><h1>ملف التسجيل واستلام الطلب</h1><p>'+esc(record.reference)+' · '+esc(new Date(record.created_at).toLocaleDateString('ar-EG'))+'</p></header><dl>'+rows.map(([k,v])=>'<dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd>').join('')+'</dl><h3>الخطوة التالية</h3><p>فريق ميد إيست هيراجع بياناتك والمستندات، ويتواصل معك لتحديد الخطوات والرسوم المناسبة لطلبك.</p><p>جهّز جواز السفر، الشهادة الدراسية، كشف الدرجات وصورة شخصية حسب متطلبات الجهة المختصة.</p><footer>استلام التسجيل لا يعني قبولًا جامعيًا أو اعتمادًا للمستندات أو سداد رسوم. الملف صادر من Middle East للخدمات التعليمية.<br>واتساب المكتب: +20 11 30343708</footer></html>';
 }
 export function createRegistration(db,input,key,origin){
@@ -74,13 +76,13 @@ export function createRegistration(db,input,key,origin){
     const assigned=db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(contact.owner_id);
     if(!assigned)fail(409,'ملف الرقم يحتاج مراجعة إسناد من الإدارة');
     const actor={...assigned,role:'admin'};
-    const student=validateAppData(db,actor,apps.me_students,{guardian:contact.id,certificate:clean.certificate,academic_year:clean.academic_year,nationality:clean.nationality,notes:clean.notes});
+    const student=validateAppData(db,actor,apps.me_students,{guardian:contact.id,certificate:clean.certificate,academic_year:clean.academic_year,nationality:clean.nationality,notes:[clean.requested_service?'الخدمة المطلوبة: '+clean.requested_service:'',clean.notes].filter(Boolean).join('\n')});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(studentId,apps.me_students,clean.name,assigned.id,student,now(),now());
-    const admission=validateAppData(db,actor,apps.me_admissions,{student:studentId,reference:record.reference,university:clean.university,faculty:clean.faculty,level:clean.level,application_status:'استكمال البيانات'});
+    const admission=validateAppData(db,actor,apps.me_admissions,{student:studentId,reference:record.reference,university:clean.university,faculty:clean.faculty,level:clean.level,application_status:'استكمال البيانات',...(clean.requested_service?{requested_service:clean.requested_service}:{})});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(admissionId,apps.me_admissions,record.reference+' · '+clean.name,assigned.id,admission,now(),now());
     const existingEnquiry=db.prepare("SELECT id FROM leads WHERE contact_id=? AND stage NOT IN('won','lost') AND title LIKE 'استفسار%' ORDER BY created_at DESC LIMIT 1").get(contact.id);
     if(existingEnquiry){leadId=existingEnquiry.id;}else{
-      const lead={id:leadId,contact_id:contact.id,title:clean.level+' · '+clean.name,stage:'new',owner_id:assigned.id};
+      const lead={id:leadId,contact_id:contact.id,title:(clean.requested_service||clean.level)+' · '+clean.name,stage:'new',owner_id:assigned.id};
       db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(leadId,contact.id,lead.title,'new',0,assigned.id,'{}',now(),now());
       runAutomations(db,'lead.created',lead,leadId);
     }
@@ -114,7 +116,7 @@ export function receiptByToken(db,value){
 }
 export function listRegistrations(db,user){
   if(user.role==='accountant')fail(403,'سجل التسجيلات لفريق العملاء');
-  return db.prepare('SELECT r.id,r.reference,r.contact_id,r.lead_id,r.student_id,r.admission_id,r.source,r.campaign,r.file_id,r.delivery_status,r.delivery_reason,r.created_at,c.name,c.phone,c.owner_id,m.status AS message_status FROM intake_registrations r JOIN contacts c ON c.id=r.contact_id LEFT JOIN messages m ON m.id=r.message_id'+(manager(user)?'':' WHERE c.owner_id=?')+' ORDER BY r.created_at DESC LIMIT 500').all(...(manager(user)?[]:[user.id]));
+  return db.prepare('SELECT r.id,r.reference,r.contact_id,r.lead_id,r.student_id,r.admission_id,r.source,r.campaign,r.file_id,r.delivery_status,r.delivery_reason,r.created_at,json_extract(a.data,?) AS requested_service,c.name,c.phone,c.owner_id,m.status AS message_status FROM intake_registrations r JOIN contacts c ON c.id=r.contact_id JOIN app_records a ON a.id=r.admission_id LEFT JOIN messages m ON m.id=r.message_id'+(manager(user)?'':' WHERE c.owner_id=?')+' ORDER BY r.created_at DESC LIMIT 500').all('$.requested_service',...(manager(user)?[]:[user.id]));
 }
 export function registrationFiles(db,user,id){
   if(user.role==='accountant')fail(403,'الملفات لفريق العملاء');

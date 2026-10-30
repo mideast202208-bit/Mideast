@@ -28,7 +28,11 @@ export function installEducationWorkspace(db,user){
     addField(admissions,'reference','رقم الطلب','text');
     addField(admissions,'university','الجامعة المطلوبة','text',1);
     addField(admissions,'faculty','الكلية المطلوبة','text',1);
-    addField(admissions,'level','المرحلة الدراسية','select',1,['بكالوريوس','ماجستير','دكتوراه']);
+    addField(admissions,'level','المرحلة الدراسية','select',1,['بكالوريوس','ماجستير','دكتوراه','غير دراسي']);
+    const levelField=db.prepare("SELECT id,options FROM app_fields WHERE app_id=? AND field_key='level'").get(admissions);
+    const levelOptions=JSON.parse(levelField.options);
+    if(!levelOptions.includes('غير دراسي'))db.prepare('UPDATE app_fields SET options=? WHERE id=?').run(JSON.stringify([...levelOptions,'غير دراسي']),levelField.id);
+    addField(admissions,'requested_service','الخدمة المطلوبة','text');
     addField(admissions,'application_status','حالة الملف','select',1,['استكمال البيانات','جمع المستندات','جاهز للتقديم','تم التقديم','قبول مبدئي','قبول نهائي','مغلق']);
     addField(admissions,'next_date','موعد المراجعة القادمة','date');
     const documents=createApp('me_documents','سجل المستندات','فهرس المستندات وحالة استلامها؛ الملف الفعلي يرفع إلى جهة الاتصال بعد تحديد الطالب.');
