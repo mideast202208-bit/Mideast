@@ -16,6 +16,8 @@
           if(!url.searchParams.has('source'))url.searchParams.set('source',new URLSearchParams(location.search).get('source')||'website');
           a.href=target+'?'+url.searchParams;
         }
+        const destination=new URL(a.href,location.href);
+        if(destination.origin===origin&&destination.pathname==='/apply'&&!a.closest('#me-quick-contact'))a.dataset.mideastPopup='1';
       }catch{}
     });
     document.querySelectorAll('iframe[src]').forEach(frame=>{
@@ -42,6 +44,16 @@
     document.querySelectorAll('main div').forEach(e=>{if(!e.children.length&&e.textContent.trim()==='الخدمة ← تفاصيل الطلب ← التواصل ← المستندات ← المراجعة')e.textContent='الدراسة ← التواصل ← المستندات ← تأكيد التسجيل';});
   }
   function schedule(){if(!pending){pending=true;requestAnimationFrame(connect);}}
+  document.addEventListener('click',event=>{
+    const link=event.target.closest?.('a[data-mideast-popup]');
+    if(!link||event.defaultPrevented||event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey||link.target==='_blank')return;
+    const popup=document.getElementById('me-quick-contact'),frame=popup?.querySelector('iframe');
+    if(!popup||!frame||typeof popup.showModal!=='function')return;
+    event.preventDefault();const url=new URL(frameUrl(link.href,true));
+    if(frame.src!==url.href)frame.src=url.href;
+    frame.title='التسجيل مع ميد إيست';frame.dataset.mideastPlatform='1';frame.style.width='100%';frame.style.border='0';
+    if(!popup.open)popup.showModal();
+  });
   const style=document.createElement('style');
   style.textContent='#me-quick-contact{width:min(760px,calc(100vw - 20px))!important;max-height:92dvh!important;padding:0!important;border:0!important;border-radius:18px!important;overflow:auto!important;color:#173f3c!important;background:#fff!important}#me-quick-contact::backdrop{background:#0b263eaa;backdrop-filter:blur(4px)}#me-quick-contact .me-quick-top{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #dfebe4;padding:14px 20px}#me-quick-close{min-width:44px;min-height:44px;cursor:pointer}#me-quick-contact iframe{display:block;max-width:100%;min-height:540px!important}#me-quick-contact .me-continue{padding:14px 20px;background:#f2f8f3;border-top:1px solid #dfebe4;font:12px/1.8 Tahoma,Arial}#me-quick-contact .me-continue a{display:inline-block;background:#173f3c;color:white;padding:10px 18px;border-radius:9px;text-decoration:none}@media(max-width:600px){#me-quick-contact{width:calc(100vw - 12px)!important;max-height:96dvh!important;border-radius:12px!important}#me-quick-contact .me-quick-top{padding:8px 12px}#me-quick-contact .me-continue{padding:10px 15px}}';
   (document.head||document.documentElement).append(style);
