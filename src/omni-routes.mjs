@@ -1,6 +1,8 @@
+import {readFileSync} from 'node:fs';
 import { uid,now,text,fail,manager,audit,getContact } from './service.mjs';
 import { ensureOmniDefaults,intakeSettings,setIntakeSettings,intakeOwner,channelSummary,channelConfig,saveChannel,issueIntegrationKey,authorizeIntegrationKey } from './omni-config.mjs';
-import { listRegistrations,createRegistration,receiptByToken } from './intake.mjs';
+import { listRegistrations,createRegistration,receiptByToken,intakeLimits,registrationFiles } from './intake.mjs';
+import { connectMetaAccounts } from './meta-connect.mjs';
 import { socialThread,queueSocialReply,testSocialAccount,acceptSocialWebhook } from './social.mjs';
 import { runVirtualLab } from './virtual-lab.mjs';
 import { timingSafeEqual } from 'node:crypto';
@@ -8,10 +10,9 @@ import { timingSafeEqual } from 'node:crypto';
 export function integrationLinks(origin){
   return {website:origin+'/apply?source=website',facebook:origin+'/apply?source=facebook',instagram:origin+'/apply?source=instagram',whatsapp:origin+'/apply?source=whatsapp',api:origin+'/api/external/registrations',facebook_webhook:origin+'/webhooks/facebook',instagram_webhook:origin+'/webhooks/instagram',whatsapp_webhook:origin+'/webhooks/whatsapp',connect_script:origin+'/connect.js'};
 }
-export function embedScript(origin){
-  const target=JSON.stringify(origin+'/apply'),allowed=JSON.stringify(['mideastedu-eg.com','www.mideastedu-eg.com']);
-  return '(function(){if('+allowed+'.indexOf(location.hostname)<0)return;function connect(){document.querySelectorAll("a[href]").forEach(function(a){try{var u=new URL(a.href,location.href);if(!a.getAttribute("href").startsWith("#")&&u.hostname===location.hostname&&u.pathname.replace(/\\/$/,"")==="/registration"){var p=new URLSearchParams(u.search);if(!p.has("source"))p.set("source",new URLSearchParams(location.search).get("source")||"website");a.href='+target+'+"?"+p.toString();}}catch(e){}});document.querySelectorAll("iframe[src]").forEach(function(f){try{var u=new URL(f.src);if(u.hostname==="middle-east-education-services.odoo.com"&&u.pathname==="/contactus"){var p=new URLSearchParams(u.search);if(!p.has("source"))p.set("source",new URLSearchParams(location.search).get("source")||"website");p.set("embed","1");f.src='+target+'+"?"+p.toString();f.title="التسجيل مع ميد إيست";f.setAttribute("data-mideast-platform","1");f.style.minHeight="680px";f.style.width="100%";f.style.border="0";}}catch(e){}});document.querySelectorAll("main h1").forEach(function(h){if(h.textContent.trim()==="التسجيل بالخمس خطوات")h.textContent="ابدأ طلبك مع ميد إيست";});document.querySelectorAll("main div").forEach(function(e){if(!e.children.length&&e.textContent.trim()==="الخدمة ← تفاصيل الطلب ← التواصل ← المستندات ← المراجعة")e.textContent="الدراسة ← التواصل ← المستندات ← تأكيد التسجيل";});}window.addEventListener("message",function(e){if(e.origin!==new URL('+target+').origin||e.data?.type!=="mideast-platform-form-height")return;document.querySelectorAll("iframe[data-mideast-platform]").forEach(function(f){if(e.source===f.contentWindow&&Number.isFinite(e.data.height)){f.style.height=Math.min(3000,Math.max(680,e.data.height+20))+"px";}});});if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",connect);else connect();new MutationObserver(connect).observe(document.documentElement,{childList:true,subtree:true});})();';
-}
+const connectorSource=readFileSync(new URL('../public/connect.js',import.meta.url),'utf8');
+export function embedScript(origin){return connectorSource.replace('__CRM_ORIGIN__',JSON.stringify(origin));}
+let activeIntakeUploads=0;
 export async function handleOmniPublic(ctx){
   const {db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}=ctx;
   ensureOmniDefaults(db);
@@ -23,7 +24,7 @@ export async function handleOmniPublic(ctx){
   if(path==='/connect.js'&&method==='GET'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(embedScript(origin));return true;}
   if(path==='/public/intake'&&method==='GET'){
     const settings=intakeSettings(db);
-    sendJson(res,200,{enabled:Boolean(settings.enabled&&intakeOwner(db)),company_name:db.prepare("SELECT value FROM settings WHERE key='company_name'").get()?.value||'Middle East',max_files:3,max_file_mb:5,whatsapp:'201130343708'});return true;
+    sendJson(res,200,{enabled:Boolean(settings.enabled&&intakeOwner(db)),company_name:db.prepare("SELECT value FROM settings WHERE key='company_name'").get()?.value||'Middle East',max_files:intakeLimits.maxFiles,max_file_mb:intakeLimits.maxFileMB,max_total_mb:intakeLimits.maxTotalMB,whatsapp:'201130343708'});return true;
   }
   if((path==='/public/registrations'||path==='/api/external/registrations')&&method==='POST'){
     const settings=intakeSettings(db);
@@ -34,11 +35,16 @@ export async function handleOmniPublic(ctx){
     }else{
       const apiKey=authorizeIntegrationKey(db,req.headers['x-mideast-key']);rateLimit('intake-key:'+apiKey.id,300,3600000);
     }
-    const input=await jsonBody(req,15*1024*1024);
-    if(path.startsWith('/api/'))input.source='api';
-    const result=createRegistration(db,input,secretKey,origin);
-    sendJson(res,result.replayed?200:201,result);return true;
+    if(activeIntakeUploads>=2)fail(429,'طلبات رفع كثيرة في اللحظة الحالية؛ أعد المحاولة بعد قليل');
+    activeIntakeUploads++;
+    try{
+      const input=await jsonBody(req,intakeLimits.maxBodyMB*1024*1024);
+      if(path.startsWith('/api/'))input.source='api';
+      const result=createRegistration(db,input,secretKey,origin);
+      sendJson(res,result.replayed?200:201,result);return true;
+    }finally{activeIntakeUploads--;}
   }
+
   const hook=path.match(/^\/webhooks\/(facebook|instagram)$/);
   if(hook){
     const channel=hook[1],config=channelConfig(db,channel,secretKey);
@@ -71,6 +77,9 @@ export async function handleOmni(ctx){
   const {db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}=ctx;
   const respond=(status,value)=>{sendJson(res,status,value);return true;};
   if(path==='/api/hub'&&method==='GET')return respond(200,hubData(db,user,origin,config));
+  if(path==='/api/channels/meta/connect'&&method==='POST')return respond(200,await connectMetaAccounts(db,user,await jsonBody(req),secretKey,origin,transport));
+  const files=path.match(/^\/api\/intake\/([^/]+)\/files$/);
+  if(files&&method==='GET')return respond(200,registrationFiles(db,user,files[1]));
   if(path==='/api/intake/settings'&&method==='PATCH')return respond(200,setIntakeSettings(db,user,await jsonBody(req)));
   const channel=path.match(/^\/api\/channels\/(facebook|instagram)(\/test)?$/);
   if(channel){

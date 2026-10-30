@@ -2,6 +2,7 @@ import { transaction } from './db.mjs';
 import { uid,now,fail,audit,getContact,runAutomations } from './service.mjs';
 import { hash,windowOpen,validSignature } from './security.mjs';
 import { channelConfig,intakeSettings,renderReply } from './omni-config.mjs';
+import { registrationLink } from './intake-links.mjs';
 
 export function acceptSocialWebhook(db,channel,raw,signature,key){
   const config=channelConfig(db,channel,key);
@@ -45,7 +46,7 @@ export function processSocialEvents(db,key,origin){
           db.prepare('UPDATE channel_accounts SET last_event_at=? WHERE channel=?').run(now(),event.channel);
           if(first&&intakeSettings(db).social_auto_reply){
             const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
-            const reply=renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:origin+'/apply?source='+event.channel});
+            const reply=renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:registrationLink(thread.contact_id,event.channel,key,origin)});
             db.prepare('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?)').run(uid(),thread.id,null,'out',reply,'queued',null,now());
           }
         }

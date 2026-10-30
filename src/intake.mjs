@@ -5,6 +5,9 @@ import { encryptSecret,decryptSecret } from './integration-settings.mjs';
 import { intakeSettings,intakeOwner,channelNames } from './omni-config.mjs';
 import { validateAppData } from './studio.mjs';
 import { queueMessage } from './whatsapp.mjs';
+import { resolveRegistrationLink } from './intake-links.mjs';
+
+export const intakeLimits=Object.freeze({maxFiles:12,maxFileMB:5,maxTotalMB:25,maxBodyMB:36});
 
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export function cleanIntake(input){
@@ -24,15 +27,15 @@ export function cleanIntake(input){
   const level=input.level||'بكالوريوس';if(!['بكالوريوس','ماجستير','دكتوراه'].includes(level))fail(400,'مرحلة دراسية غير صالحة');
   const result={name,phone,email,source,certificate,academic_year,level,nationality:text(input.nationality||'','الجنسية',80,false),university:text(input.university||'أحتاج استشارة','الجامعة',160),faculty:text(input.faculty||'أحتاج استشارة','التخصص',160),notes:text(input.notes||'','الملاحظات',2000,false),campaign:text(input.campaign||'','الحملة',150,false),whatsapp_opt_in:input.whatsapp_opt_in===true};
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(input.request_key||''))fail(400,'مفتاح الطلب غير صالح؛ أعد فتح النموذج');
-  return {...result,request_key:input.request_key};
+  return {...result,request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{})};
 }
 function intakeFiles(files=[]){
-  if(!Array.isArray(files)||files.length>3)fail(400,'بحد أقصى ثلاثة مستندات');
+  if(!Array.isArray(files)||files.length>intakeLimits.maxFiles)fail(400,'بحد أقصى 12 مستندًا');
   let total=0;
   return files.map(f=>{
     if(!f||typeof f.content!=='string'||f.content.length>7*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(f.content))fail(400,'ملف غير صالح');
     const bytes=Buffer.from(f.content,'base64');total+=bytes.length;
-    if(!bytes.length||bytes.length>5*1024*1024||total>10*1024*1024)fail(413,'حد كل ملف 5 ميجابايت والمجموع 10 ميجابايت');
+    if(!bytes.length||bytes.length>intakeLimits.maxFileMB*1024*1024||total>intakeLimits.maxTotalMB*1024*1024)fail(413,'حد كل ملف 5 ميجابايت والمجموع 25 ميجابايت');
     const mime=f.mime;
     if(!(mime==='application/pdf'&&bytes.subarray(0,5).toString()==='%PDF-')&&
       !(mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)&&
@@ -54,14 +57,20 @@ export function createRegistration(db,input,key,origin){
   const apps=Object.fromEntries(db.prepare("SELECT app_key,id FROM studio_apps WHERE app_key IN('me_students','me_admissions','me_documents')").all().map(a=>[a.app_key,a.id]));
   if(!apps.me_students||!apps.me_admissions||!apps.me_documents)fail(503,'تطبيقات الطلاب غير مجهزة');
   const record={id:uid(),reference:'ME-'+new Date().getUTCFullYear()+'-'+token().slice(0,10).toUpperCase(),created_at:now()};
-  const receipt=token(),fileId=uid(),studentId=uid(),admissionId=uid(),leadId=uid();
+  const receipt=token(),fileId=uid(),studentId=uid(),admissionId=uid();let leadId=uid();
   transaction(db,()=>{
-    let contact=db.prepare('SELECT * FROM contacts WHERE phone=?').get(clean.phone),created=!contact;
+    const linkedId=resolveRegistrationLink(clean.link_token,key);
+    const linked=linkedId?db.prepare('SELECT * FROM contacts WHERE id=?').get(linkedId):null;
+    if(linkedId&&!linked)fail(400,'رابط العميل غير متاح');
+    const byPhone=db.prepare('SELECT * FROM contacts WHERE phone=?').get(clean.phone);
+    if(linked&&((linked.phone&&linked.phone!==clean.phone)||(byPhone&&byPhone.id!==linked.id)))fail(409,'الرقم مرتبط بملف مختلف؛ تواصل مع الفريق لمراجعة ربط الحساب');
+    let contact=linked||byPhone,created=!contact;
     if(!contact){
       contact={id:uid(),name:clean.name,phone:clean.phone,email:clean.email,owner_id:owner.id,source:clean.source};
       db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,contact.phone,contact.email,clean.source,owner.id,'{}',now(),now());
       runAutomations(db,'contact.created',contact,contact.id);
     }
+    if(linked&&!linked.phone){db.prepare("UPDATE contacts SET phone=?,email=CASE WHEN email='' THEN ? ELSE email END,updated_at=? WHERE id=?").run(clean.phone,clean.email,now(),linked.id);}
     const assigned=db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(contact.owner_id);
     if(!assigned)fail(409,'ملف الرقم يحتاج مراجعة إسناد من الإدارة');
     const actor={...assigned,role:'admin'};
@@ -69,9 +78,12 @@ export function createRegistration(db,input,key,origin){
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(studentId,apps.me_students,clean.name,assigned.id,student,now(),now());
     const admission=validateAppData(db,actor,apps.me_admissions,{student:studentId,reference:record.reference,university:clean.university,faculty:clean.faculty,level:clean.level,application_status:'استكمال البيانات'});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(admissionId,apps.me_admissions,record.reference+' · '+clean.name,assigned.id,admission,now(),now());
-    const lead={id:leadId,contact_id:contact.id,title:clean.level+' · '+clean.name,stage:'new',owner_id:assigned.id};
-    db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(leadId,contact.id,lead.title,'new',0,assigned.id,'{}',now(),now());
-    runAutomations(db,'lead.created',lead,leadId);
+    const existingEnquiry=db.prepare("SELECT id FROM leads WHERE contact_id=? AND stage NOT IN('won','lost') AND title LIKE 'استفسار%' ORDER BY created_at DESC LIMIT 1").get(contact.id);
+    if(existingEnquiry){leadId=existingEnquiry.id;}else{
+      const lead={id:leadId,contact_id:contact.id,title:clean.level+' · '+clean.name,stage:'new',owner_id:assigned.id};
+      db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(leadId,contact.id,lead.title,'new',0,assigned.id,'{}',now(),now());
+      runAutomations(db,'lead.created',lead,leadId);
+    }
     db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(uid(),contact.id,leadId,'مراجعة التسجيل '+record.reference,new Date(Date.now()+2*3600000).toISOString(),'open',assigned.id,now());
     db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(fileId,contact.id,null,'registration-'+record.reference+'.html','text/html',Buffer.from(registrationFile(record,clean)),now());
     const indexDocument=(name,attachmentId)=>{
@@ -103,6 +115,14 @@ export function receiptByToken(db,value){
 export function listRegistrations(db,user){
   if(user.role==='accountant')fail(403,'سجل التسجيلات لفريق العملاء');
   return db.prepare('SELECT r.id,r.reference,r.contact_id,r.lead_id,r.student_id,r.admission_id,r.source,r.campaign,r.file_id,r.delivery_status,r.delivery_reason,r.created_at,c.name,c.phone,c.owner_id,m.status AS message_status FROM intake_registrations r JOIN contacts c ON c.id=r.contact_id LEFT JOIN messages m ON m.id=r.message_id'+(manager(user)?'':' WHERE c.owner_id=?')+' ORDER BY r.created_at DESC LIMIT 500').all(...(manager(user)?[]:[user.id]));
+}
+export function registrationFiles(db,user,id){
+  if(user.role==='accountant')fail(403,'الملفات لفريق العملاء');
+  const row=db.prepare('SELECT contact_id,admission_id FROM intake_registrations WHERE id=?').get(id);
+  if(!row)fail(404,'التسجيل غير متاح');getContact(db,user,row.contact_id);
+  return db.prepare(`SELECT a.id,a.name,a.mime,length(a.content) AS size FROM app_records d
+    JOIN studio_apps s ON s.id=d.app_id JOIN attachments a ON a.id=json_extract(d.data,'$.file_reference')
+    WHERE s.app_key='me_documents' AND json_extract(d.data,'$.application')=? AND a.contact_id=? ORDER BY a.created_at,a.name`).all(row.admission_id,row.contact_id);
 }
 export async function processIntakeDelivery(db,config,key,origin){
   const row=db.prepare("SELECT * FROM intake_registrations WHERE delivery_status='pending' ORDER BY created_at LIMIT 1").get();if(!row)return;
