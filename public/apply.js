@@ -1,6 +1,18 @@
 const form=document.querySelector('#application-form'),steps=[...form.querySelectorAll('[data-step]')],error=document.querySelector('#form-error');
 let current=0,busy=false,requestKey=crypto.randomUUID().replaceAll('-','');
 form.elements.academic_year.value=String(new Date().getFullYear());
+const initialParams=new URLSearchParams(location.search);
+if(['بكالوريوس','ماجستير','دكتوراه'].includes(initialParams.get('service')))form.elements.level.value=initialParams.get('service');
+if(initialParams.get('embed')==='1'){
+  document.body.classList.add('embedded');
+  if(window.parent!==window){
+    let parentOrigin;try{parentOrigin=new URL(document.referrer).origin;}catch{}
+    if(['https://mideastedu-eg.com','https://www.mideastedu-eg.com'].includes(parentOrigin)){
+      const report=()=>window.parent.postMessage({type:'mideast-platform-form-height',height:document.body.scrollHeight},parentOrigin);
+      new ResizeObserver(report).observe(document.body);report();
+    }
+  }
+}
 function showStep(index){
   current=index;steps.forEach((step,i)=>{step.hidden=i!==index;});
   document.querySelector('#step-label').textContent='الخطوة '+(index+1)+' من 4';
