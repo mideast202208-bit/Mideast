@@ -1,5 +1,5 @@
 import { transaction } from './db.mjs';
-import { uid,now,fail,audit,getContact,runAutomations } from './service.mjs';
+import { uid,now,fail,audit,getContact,runAutomations,ensureInboundLead } from './service.mjs';
 import { hash,windowOpen,validSignature } from './security.mjs';
 import { channelConfig,intakeSettings,renderReply } from './omni-config.mjs';
 import { registrationLink } from './intake-links.mjs';
@@ -37,11 +37,9 @@ export function processSocialEvents(db,key,origin){
             const contact={id:uid(),name:(event.channel==='facebook'?'عميل فيسبوك ':'عميل إنستجرام ')+sender.slice(-6),owner_id:owner.id,source:event.channel};
             db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,null,'',event.channel,owner.id,'{}',now(),now());
             runAutomations(db,'contact.created',contact,contact.id);
-            const lead={id:uid(),contact_id:contact.id,title:'استفسار '+contact.name,owner_id:owner.id,stage:'new'};
-            db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(lead.id,contact.id,lead.title,'new',0,owner.id,'{}',now(),now());
-            runAutomations(db,'lead.created',lead,lead.id);
             thread={id:uid(),contact_id:contact.id};db.prepare('INSERT INTO social_threads VALUES(?,?,?,?,?,?,?)').run(thread.id,event.channel,config.account_id,sender,contact.id,null,now());
           }
+          ensureInboundLead(db,db.prepare('SELECT * FROM contacts WHERE id=?').get(thread.contact_id),event.channel);
           const received=new Date(Math.min(Date.now(),stamp)).toISOString();
           const body=String(message.text|| (message.attachments?.length?'[مرفق وارد: راجعه في القناة الأصلية]':'[رسالة غير نصية]')).slice(0,10000);
           db.prepare('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?)').run(uid(),thread.id,message.mid,'in',body,'received',null,received);

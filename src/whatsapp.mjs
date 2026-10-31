@@ -1,6 +1,7 @@
+import {whatsappStatusReply} from './customer-status.mjs';
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
-import { uid, now, audit, runAutomations, fail, text } from './service.mjs';
+import { uid, now, audit, runAutomations, fail, text, ensureInboundLead } from './service.mjs';
 import { intakeSettings, renderReply } from './omni-config.mjs';
 import { registrationLink } from './intake-links.mjs';
 import {resolveWhatsAppConfig,messageWhatsAppConfig} from './accounts.mjs';
@@ -44,12 +45,9 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
               db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)')
                 .run(contact.id,name,phone,'','whatsapp',intake.id,'{}',now(),now());
               runAutomations(db,'contact.created',contact,contact.id);
-              const lead = {id:uid(),contact_id:contact.id,title:'استفسار واتساب — '+name,owner_id:intake.id,stage:'new'};
-              db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)')
-                .run(lead.id,contact.id,lead.title,'new',0,intake.id,'{}',now(),now());
-              runAutomations(db,'lead.created',lead,lead.id);
               audit(db,null,'whatsapp_created','contact',contact.id);
             }
+            ensureInboundLead(db,contact,'whatsapp');
             let conversation = db.prepare('SELECT * FROM conversations WHERE contact_id=?').get(contact.id);
             if (!conversation) {
               conversation={id:uid(),contact_id:contact.id};
@@ -73,14 +71,16 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
             // Explicit column names keep record shape changes visible and retain the latest inbound time.
             db.prepare('UPDATE conversations SET last_inbound=MAX(COALESCE(last_inbound,?),?) WHERE id=?').run(received,received,conversation.id);
             runAutomations(db,'whatsapp.received',contact,messageId);
-            if(firstInbound && windowOpen(received) && intakeSettings(db).whatsapp_auto_reply && /^https?:\/\//.test(origin)){
+            const settings=intakeSettings(db);
+            const statusReply=windowOpen(received)&&settings.whatsapp_auto_reply&&settings.whatsapp_status_lookup===true&&kind==='text'?whatsappStatusReply(db,contact,phone,body):null;
+            if(windowOpen(received)&&settings.whatsapp_auto_reply&&(statusReply||firstInbound&&/^https?:\/\//.test(origin))){
               const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
-              const body=renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:registrationLink(contact.id,'whatsapp',key,origin)});
+              const body=statusReply||renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:registrationLink(contact.id,'whatsapp',key,origin)});
               const replyId=uid();
               db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
                 VALUES(?,?,?,?,?,?,?,?)`).run(replyId,conversation.id,'out','text',body,JSON.stringify({type:'text',text:{body}}),'queued',now());
               db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(replyId,config.phoneId);
-              audit(db,intake,'auto_welcome','message',replyId);
+              audit(db,intake,statusReply?'auto_status':'auto_welcome','message',replyId);
             }
           }
         }
