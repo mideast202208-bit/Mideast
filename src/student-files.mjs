@@ -11,7 +11,10 @@ function summary(db,user,row){const data=JSON.parse(row.data),opportunities=db.p
 export function studentFile(db,user,id){const s=scope(user),row=db.prepare(select+' WHERE s.id=?'+s.sql).get(id,...s.args);if(!row)fail(404,'ملف الطالب غير متاح');return summary(db,user,row);}
 export function findStudents(db,user,query='',contactId=null){
  const s=scope(user),q=normalizeSearch(query).slice(0,160);if(!q&&!contactId)return [];
- const rows=db.prepare(select+' WHERE 1=1'+s.sql+(contactId?' AND c.id=?':'')+(q?` AND (instr(me_search_normalize(s.name),?)>0 OR instr(me_search_normalize(c.phone),?)>0 OR EXISTS(SELECT 1 FROM intake_registrations r WHERE r.student_id=s.id AND instr(me_search_normalize(r.reference),?)>0) OR instr(me_search_normalize('ST-'||substr(replace(s.id,'-',''),1,12)),?)>0)`:'')+' ORDER BY s.updated_at DESC LIMIT 30').all(...s.args,...(contactId?[contactId]:[]),...(q?[q,q,q,q]:[]));
+ // Never let phone-prefix queries become a staff oracle after response masking.
+ if(!manager(user)&&q&&/^[+\d\s().-]+$/.test(q))return [];
+ const phoneSearch=manager(user);
+ const rows=db.prepare(select+' WHERE 1=1'+s.sql+(contactId?' AND c.id=?':'')+(q?` AND (instr(me_search_normalize(s.name),?)>0${phoneSearch?' OR instr(me_search_normalize(c.phone),?)>0':''} OR EXISTS(SELECT 1 FROM intake_registrations r WHERE r.student_id=s.id AND instr(me_search_normalize(r.reference),?)>0) OR instr(me_search_normalize('ST-'||substr(replace(s.id,'-',''),1,12)),?)>0)`:'')+' ORDER BY s.updated_at DESC LIMIT 30').all(...s.args,...(contactId?[contactId]:[]),...(q?(phoneSearch?[q,q,q,q]:[q,q,q]):[]));
  return rows.map(row=>summary(db,user,row));
 }
 export function studentDossier(db,user,id){

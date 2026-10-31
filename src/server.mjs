@@ -23,6 +23,8 @@ import { processIntakeDelivery } from './intake.mjs';
 import {internationalPhone} from './international.mjs';
 import {handleMarketing,processMarketingJobs,processMarketingPlans,recoverMarketingJobs} from './marketing.mjs';
 import {handleCommunication} from './communication.mjs';
+import {canViewContactDetails,projectCustomerResponse,assertSafeStaffWrite} from './privacy.mjs';
+import {handleCustomerWorkspace,recoverCustomerEmailJobs,processCustomerEmail} from './customer-workspace.mjs';
 import {handleAssistant} from './assistant.mjs';
 import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
 
@@ -36,12 +38,14 @@ export function createApp(options = {}) {
   if (production && !origin.startsWith('https://')) throw new Error('Production requires HTTPS PUBLIC_ORIGIN');
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
+  recoverCustomerEmailJobs(db);
   recoverMarketingJobs(db);
   let config = effectiveConfig(db,env,secretKey);
   if(config.phoneId)db.prepare("INSERT OR IGNORE INTO wa_thread_accounts SELECT v.id,?,MAX(m.created_at) FROM conversations v JOIN messages m ON m.conversation_id=v.id LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.direction='in' AND a.message_id IS NULL GROUP BY v.id").run(String(config.phoneId));
   const limits = new Map();
   let sending = false;
-  const sendJson = (res,status,data) => {res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
+  const responseUsers=new WeakMap(),requestUsers=new WeakMap();
+  const sendJson = (res,status,data) => {res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(projectCustomerResponse(db,responseUsers.get(res),data)));};
   const rateLimit = (key,maximum,period) => {
     const stamp=Date.now();
     if(limits.size>10000) for(const [k,v] of limits) if(v.until<stamp) limits.delete(k);
@@ -57,7 +61,7 @@ export function createApp(options = {}) {
   }
   async function jsonBody(req,max) {
     if(!String(req.headers['content-type'] || '').startsWith('application/json'))fail(415,'استخدم JSON');
-    try {const value=JSON.parse((await rawBody(req,max)).toString('utf8'));if(!value || Array.isArray(value)||typeof value!=='object')fail(400,'طلب غير صالح');return value;}
+    try {const value=JSON.parse((await rawBody(req,max)).toString('utf8'));if(!value || Array.isArray(value)||typeof value!=='object')fail(400,'طلب غير صالح');assertSafeStaffWrite(requestUsers.get(req),value);return value;}
     catch(error){if(error.status)throw error;fail(400,'JSON غير صالح');}
   }
   function authenticate(req,write=false) {
@@ -99,11 +103,17 @@ export function createApp(options = {}) {
         try{const payload=JSON.parse(raw);if(payload.object!=='whatsapp_business_account')fail(400,'Invalid webhook object');payload.entry=(payload.entry||[]).map(e=>({...e,changes:(e.changes||[]).filter(c=>accepted.some(a=>String(a.phoneId)===String(c.value?.metadata?.phone_number_id)))}));acceptWebhook(db,Buffer.from(JSON.stringify(payload)));}catch(error){if(error.status)throw error;fail(400,'Invalid webhook');}
         sendJson(res,200,{received:true});return;
       }
+      // A known staff session cannot open original customer receipts. Public bearer
+      // links already known before this policy cannot be recalled by browser role.
+      if(/^\/receipt\//.test(path)){
+        let receiptUser;try{receiptUser=authenticate(req);}catch{}
+        if(receiptUser){responseUsers.set(res,receiptUser);if(!canViewContactDetails(receiptUser))fail(403,'أصل التسجيل يحتوي بيانات اتصال؛ متاح للإدارة فقط');}
+      }
       if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
         if(path==='/phone-lib.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(readFileSync(new URL('../node_modules/libphonenumber-js/bundle/libphonenumber-min.js',import.meta.url)));return;}
-        const assets={'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
+        const assets={'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
@@ -137,6 +147,8 @@ export function createApp(options = {}) {
         audit(db,row,'login','user',row.id);sendJson(res,200,{user:safeUser(row),csrf});return;
       }
       const user=authenticate(req,write);
+      responseUsers.set(res,user);
+      requestUsers.set(req,user);
       rateLimit('api:'+user.id,600,60000);
       if(write&&path.startsWith('/api/security/mfa'))rateLimit('mfa:'+user.id,10,300000);
       if(path==='/api/me' && method==='GET'){sendJson(res,200,{user:safeUser(user),csrf:user.csrf});return;}
@@ -146,6 +158,10 @@ export function createApp(options = {}) {
         sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
+      // These render binary/HTML directly and bypass JSON projection. Staff may
+      // send an authorized stored file through the server, but cannot read it.
+      if(!canViewContactDetails(user)&&method==='GET'&&(/^\/api\/files\//.test(path)||/^\/api\/print\//.test(path)))fail(403,'الأصل قد يحتوي بيانات اتصال؛ اطلب نسخة منقحة من الإدارة');
+      if(await handleCustomerWorkspace({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,smtpTransportFactory:options.smtpTransportFactory}))return;
       if(await handleMarketing({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleAssistant({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
@@ -163,12 +179,15 @@ export function createApp(options = {}) {
           auto_media:config.autoMedia,app_secret_set:Boolean(config.appSecret),verify_token_set:Boolean(config.verifyToken),events:webhook}});return;
       }
       if(path==='/api/contacts' && method==='POST'){
-        sendJson(res,201,createContact(db,user,await jsonBody(req)));return;
+        const input=await jsonBody(req);
+        if(!canViewContactDetails(user)&&(input.phone!==undefined||input.email!==undefined))fail(403,'إضافة بيانات الاتصال متاحة للإدارة فقط');
+        sendJson(res,201,createContact(db,user,input));return;
       }
       const contactMatch=path.match(/^\/api\/contacts\/([^/]+)$/);
       if(contactMatch && method==='PATCH'){
         if(user.role==='accountant')fail(403,'غير مسموح');
         const current=getContact(db,user,contactMatch[1]);const input=await jsonBody(req);
+        if(!canViewContactDetails(user)&&(input.phone!==undefined||input.email!==undefined))fail(403,'تعديل بيانات الاتصال متاح للإدارة فقط');
         const newOwner=owner(db,user,input.owner_id || current.owner_id);
         const name=text(input.name ?? current.name,'الاسم');
         const phone=input.phone===undefined?current.phone:input.phone?(input.phone_country?internationalPhone(input.phone,input.phone_country):normalizePhone(input.phone)):null;
@@ -352,7 +371,8 @@ export function createApp(options = {}) {
     try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch,secretKey);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch,secretKey);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy)return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,options.transport||fetch);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
-  return {server,db,tick,marketingTick,get config(){return config;}};
+  let emailBusy=false;const emailTick=async()=>{if(emailBusy)return;emailBusy=true;try{await processCustomerEmail(db,secretKey,options.smtpTransportFactory);}catch(error){options.onError?.(error);}finally{emailBusy=false;}};
+  return {server,db,tick,marketingTick,emailTick,get config(){return config;}};
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   process.umask(0o077);
@@ -367,6 +387,7 @@ if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))
   app.server.listen(port,host,()=>console.log(`Mid East listening on ${host}:${port}`));
   const timer=setInterval(app.tick,3000);timer.unref();
   const marketingTimer=setInterval(app.marketingTick,10000);marketingTimer.unref();
-  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
+  const emailTimer=setInterval(app.emailTick,5000);emailTimer.unref();
+  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);clearInterval(emailTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
   process.on('SIGTERM',stop);process.on('SIGINT',stop);
 }

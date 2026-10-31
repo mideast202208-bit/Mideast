@@ -7,6 +7,7 @@ import { socialThread,queueSocialReply,testSocialAccount,acceptSocialWebhook } f
 import { runVirtualLab } from './virtual-lab.mjs';
 import { timingSafeEqual } from 'node:crypto';
 import {extraAccountConfigs} from './accounts.mjs';
+import {customerTextRedactor} from './privacy.mjs';
 
 export function integrationLinks(origin){
   return {website:origin+'/apply?source=website',facebook:origin+'/apply?source=facebook',instagram:origin+'/apply?source=instagram',whatsapp:origin+'/apply?source=whatsapp',api:origin+'/api/external/registrations',facebook_webhook:origin+'/webhooks/facebook',instagram_webhook:origin+'/webhooks/instagram',whatsapp_webhook:origin+'/webhooks/whatsapp',connect_script:origin+'/connect.js'};
@@ -20,7 +21,12 @@ export async function handleOmniPublic(ctx){
   const receipt=path.match(/^\/receipt\/([a-f0-9]{64})$/);
   if(receipt&&method==='GET'){
     const row=receiptByToken(db,receipt[1]);
-    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Disposition':'inline; filename="registration-'+row.reference+'.html"'});res.end(row.content);return true;
+    // Old bearer links remain useful for the reference, but never disclose the
+    // original customer contact details, even after logout or in a private tab.
+    // The stored attachment is immutable here and management can read it via
+    // its authenticated /api/files endpoint.
+    const content=customerTextRedactor(db)(Buffer.from(row.content).toString('utf8'));
+    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Disposition':'inline; filename="registration-'+row.reference+'.html"'});res.end(content);return true;
   }
   if(path==='/connect.js'&&method==='GET'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(embedScript(origin));return true;}
   if(path==='/public/intake'&&method==='GET'){
