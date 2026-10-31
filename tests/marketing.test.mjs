@@ -5,7 +5,7 @@ import {uid,now} from '../src/service.mjs';
 import {ensureOmniDefaults,saveChannel} from '../src/omni-config.mjs';
 import {saveExtraAccount,verifyExtraAccount,accountSummary} from '../src/accounts.mjs';
 import {saveProfile} from '../src/profiles.mjs';
-import {syncMarketingAccount,marketingData,saveMarketingPost,scheduleMarketingTarget,processMarketingJobs,recoverMarketingJobs,saveMarketingAsset,embeddedVideo,publicMarketingUrl,cairoSchedule} from '../src/marketing.mjs';
+import {syncMarketingAccount,marketingData,saveMarketingPost,scheduleMarketingTarget,processMarketingJobs,recoverMarketingJobs,saveMarketingAsset,embeddedVideo,publicMarketingUrl,cairoSchedule,saveMarketingPlan,setMarketingPlanState,processMarketingPlans,marketingPlans} from '../src/marketing.mjs';
 import {createApp} from '../src/server.mjs';
 import {renderFixture,fixture as uiFixture} from './ui-fixture.mjs';
 const permissions=['pages_read_engagement','pages_manage_posts','instagram_basic','instagram_content_publish'];
@@ -83,5 +83,57 @@ test('marketing assets are separate public images; private student files and mar
 test('marketing frontend renders its real feed safely and contains internal accounts, planner and content controls',async()=>{
  const f=fixture(),{db,key,users,base,origin}=f;try{
   const mock=provider();await syncMarketingAccount(db,users.admin,'primary-facebook',key,base,origin,mock.transport);const data=structuredClone(uiFixture);data.marketing=marketingData(db,users.admin,key,base,origin);data.marketing.feed[0].body='<img src=x onerror=alert(1)>';const ui=await renderFixture(data),html=await ui.pageAsync('marketing');assert.match(html,/تقويم النشر/);assert.match(html,/مكتبة الصور/);assert.match(html,/المحتوى والصفحات/);assert.match(html,/&lt;img/);assert.ok(!html.includes('<img src=x'));assert.ok(!html.includes('undefined'));
+ }finally{db.close();}
+});
+const planInput=templates=>({name:'Synthetic recurring plan',local_time:'20:00',weekdays:[0,1,2,3,4,5,6],accounts:['primary-facebook','primary-instagram'],templates,repeat:true,active:true,publish_ack:true});
+async function recurringFixture(){
+ const f=fixture(),mock=provider();for(const id of ['primary-facebook','primary-instagram'])await syncMarketingAccount(f.db,f.users.admin,id,f.key,f.base,f.origin,mock.transport);
+ const posts=['First','Second','Third'].map(title=>saveMarketingPost(f.db,f.users.admin,input(['primary-facebook','primary-instagram'],{title,media_url:'https://cdn.example.com/synthetic.jpg'}),f.key,f.base,f.origin));return {...f,mock,posts};
+}
+test('recurring plans generate immutable, paired, Cairo-timed slots and safely refill once across restarts',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
+  const plan=saveMarketingPlan(db,users.admin,planInput(posts.map(p=>p.id)),key,base,origin);
+  const slots=db.prepare('SELECT o.*,p.title FROM marketing_occurrences o JOIN marketing_posts p ON p.id=o.post_id WHERE plan_id=? ORDER BY local_date').all(plan.id);assert.ok(slots.length>=14&&slots.length<=15);
+  assert.equal(slots[0].title,'First');assert.equal(slots[1].title,'Second');assert.equal(slots[3].title,'First');
+  for(const s of slots){const targets=db.prepare('SELECT * FROM marketing_targets WHERE post_id=?').all(s.post_id);assert.equal(targets.length,2);assert.equal(targets[0].scheduled_at,cairoSchedule(s.local_date+'T20:00'));assert.equal(targets[1].scheduled_at,targets[0].scheduled_at);}
+  const count=db.prepare('SELECT COUNT(*) n FROM marketing_occurrences').get().n;recoverMarketingJobs(db);processMarketingPlans(db,key,base,origin);assert.equal(db.prepare('SELECT COUNT(*) n FROM marketing_occurrences').get().n,count);
+  db.prepare('UPDATE marketing_posts SET body=? WHERE id=?').run('Changed bank content',posts[0].id);assert.notEqual(db.prepare('SELECT body FROM marketing_posts WHERE id=?').get(slots[0].post_id).body,'Changed bank content');
+  processMarketingPlans(db,key,base,origin,Date.now()+7*86400000);assert.equal(db.prepare('SELECT COUNT(*) n FROM marketing_occurrences').get().n,count+7);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM (SELECT plan_id,revision,local_date,COUNT(*) c FROM marketing_occurrences GROUP BY plan_id,revision,local_date HAVING c>1)').get().n,0);
+ }finally{db.close();}
+});
+test('pausing cancels future recurring targets; resume and edits create only one current queue, without replaying old slots',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
+  const plan=saveMarketingPlan(db,users.admin,planInput(posts.map(p=>p.id)),key,base,origin);setMarketingPlanState(db,users.admin,plan.id,{active:false},key,base,origin);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n,0);assert.equal(marketingPlans(db)[0].state,'paused');
+  assert.throws(()=>setMarketingPlanState(db,users.admin,plan.id,{active:true},key,base,origin),e=>e.status===400);
+  setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin);const before=db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n;assert.ok(before>=28);
+  setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin);assert.equal(db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n,before);
+  saveMarketingPlan(db,users.admin,{...planInput(posts.map(p=>p.id)),local_time:'21:30'},key,base,origin,plan.id);const active=db.prepare("SELECT scheduled_at FROM marketing_targets WHERE status='scheduled'").all();assert.equal(active.length,before);assert.ok(active.every(t=>new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(t.scheduled_at))==='21:30'));
+ }finally{db.close();}
+});
+test('recurring plans reject unsupported channels, missing media, unsafe access, invalid dates, and unacknowledged activation',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
+  const params=planInput(posts.map(p=>p.id));assert.throws(()=>saveMarketingPlan(db,users.agent,params,key,base,origin),e=>e.status===403);assert.throws(()=>saveMarketingPlan(db,users.admin,{...params,publish_ack:false},key,base,origin),e=>e.status===400);
+  const profile=saveProfile(db,users.admin,{channel:'youtube',name:'Synthetic channel',url:'https://www.youtube.com/@synthetic'},accountSummary(db,base,origin));assert.throws(()=>saveMarketingPlan(db,users.admin,{...params,accounts:[profile.id]},key,base,origin),e=>e.status===409);
+  for(const override of [{local_time:'25:00'},{weekdays:[7]},{weekdays:[1,1]},{start_date:'2027-02-30'},{start_date:'2027-99-99'},{templates:[]}])assert.throws(()=>saveMarketingPlan(db,users.admin,{...params,...override},key,base,origin),e=>e.status===400);
+  const plain=saveMarketingPost(db,users.admin,input(),key,base,origin);assert.throws(()=>saveMarketingPlan(db,users.admin,{...params,templates:[plain.id]},key,base,origin),e=>e.status===400);
+ }finally{db.close();}
+});
+test('one-pass weekly plans exhaust the bank and missed recurring jobs never publish a backlog',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts,mock}=f;try{
+  saveMarketingPlan(db,users.admin,{...planInput(posts.map(p=>p.id)),weekdays:[1,4],repeat:false},key,base,origin);processMarketingPlans(db,key,base,origin,Date.now()+30*86400000);assert.equal(db.prepare('SELECT COUNT(*) n FROM marketing_occurrences').get().n,3);
+  const id=db.prepare('SELECT t.id FROM marketing_targets t JOIN marketing_occurrences o ON o.post_id=t.post_id LIMIT 1').get().id;db.prepare('UPDATE marketing_targets SET scheduled_at=? WHERE id=?').run(new Date(Date.now()-3*3600000).toISOString(),id);processMarketingPlans(db,key,base,origin);const missed=db.prepare('SELECT * FROM marketing_targets WHERE id=?').get(id);assert.equal(missed.error_code,'MISSED_RECURRING_SLOT');assert.equal(missed.status,'blocked');
+  await processMarketingJobs(db,key,base,origin,mock.transport);assert.equal(mock.calls.filter(c=>c.options.method==='POST').length,0);
+ }finally{db.close();}
+});
+test('revoked publishing owner access pauses recurrence and removes queued work',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
+  saveMarketingPlan(db,users.admin,planInput(posts.map(p=>p.id)),key,base,origin);db.prepare('UPDATE users SET active=0 WHERE id=?').run(users.admin.id);processMarketingPlans(db,key,base,origin);assert.equal(marketingPlans(db)[0].state,'paused');assert.equal(marketingPlans(db)[0].last_error,'PUBLISHER_ACCESS_REVOKED');assert.equal(db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n,0);
+ }finally{db.close();}
+});
+test('the continuous-publishing tab shows real plan status, pause controls and escaped titles',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
+  saveMarketingPlan(db,users.admin,{...planInput(posts.map(p=>p.id)),name:'<script>unsafe</script>'},key,base,origin);const data=structuredClone(uiFixture);data.marketing=marketingData(db,users.admin,key,base,origin);const ui=await renderFixture(data),html=await ui.marketingTab('plans');assert.match(html,/إيقاف النشر القادم/);assert.match(html,/20:00/);assert.match(html,/&lt;script&gt;/);assert.ok(!html.includes('<script>unsafe'));assert.match(html,/تيك توك ويوتيوب يحتاجان صلاحيات/);assert.ok(!html.includes('undefined'));
  }finally{db.close();}
 });

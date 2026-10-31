@@ -21,7 +21,7 @@ import { handleOmni,handleOmniPublic } from './omni-routes.mjs';
 import { processSocialEvents,sendSocialNext } from './social.mjs';
 import { processIntakeDelivery } from './intake.mjs';
 import {internationalPhone} from './international.mjs';
-import {handleMarketing,processMarketingJobs,recoverMarketingJobs} from './marketing.mjs';
+import {handleMarketing,processMarketingJobs,processMarketingPlans,recoverMarketingJobs} from './marketing.mjs';
 import {handleCommunication} from './communication.mjs';
 import {handleAssistant} from './assistant.mjs';
 import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
@@ -351,7 +351,7 @@ export function createApp(options = {}) {
     if(sending)return;sending=true;
     try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch,secretKey);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch,secretKey);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
-  let marketingBusy=false;const marketingTick=async()=>{if(marketingBusy)return;marketingBusy=true;try{await processMarketingJobs(db,secretKey,effectiveConfig(db,env,secretKey),origin,options.transport||fetch);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
+  let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy)return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,options.transport||fetch);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
   return {server,db,tick,marketingTick,get config(){return config;}};
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){

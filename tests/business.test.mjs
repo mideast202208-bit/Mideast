@@ -68,7 +68,7 @@ test('v0.3 quotations, customer notes, printable documents and readiness',async 
     });
     await t.test('readiness is restricted and does not invent successful live connectivity',async()=>{
       assert.equal((await request('/operations','GET',undefined,agent)).status,403);
-      const result=await request('/operations','GET',undefined,owner);assert.equal(result.status,200);assert.equal(result.body.database.integrity,'ok');assert.equal(result.body.database.schema_version,7);
+      const result=await request('/operations','GET',undefined,owner);assert.equal(result.status,200);assert.equal(result.body.database.integrity,'ok');assert.equal(result.body.database.schema_version,8);
       assert.equal(result.body.whatsapp.live_acceptance_verified,false);assert.equal(result.body.deployment.public_hosting_verified,false);
       assert.ok(!JSON.stringify(result.body).includes(contact.name));
     });

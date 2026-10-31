@@ -77,11 +77,11 @@ function capability(db,a,key){
 }
 export function marketingData(db,user,key,base,origin){
  access(user);const accounts=accountSummary(db,base,origin).filter(a=>socialChannels.includes(a.channel)).map(a=>({...a,marketing:capability(db,a,key)}));
- const posts=db.prepare('SELECT * FROM marketing_posts ORDER BY updated_at DESC LIMIT 300').all().map(p=>({...p,asset_url:p.asset_id?origin+'/social-media/'+p.asset_id:'',targets:db.prepare('SELECT * FROM marketing_targets WHERE post_id=?').all(p.id),registrations:p.campaign?db.prepare('SELECT COUNT(*) n FROM intake_registrations WHERE campaign=?').get(p.campaign).n:0,tracking_url:p.campaign?origin+'/apply?source=website&utm_campaign='+encodeURIComponent(p.campaign):origin+'/apply'}));
+ const posts=db.prepare('SELECT p.*,o.plan_id,o.local_date FROM marketing_posts p LEFT JOIN marketing_occurrences o ON o.post_id=p.id ORDER BY p.updated_at DESC LIMIT 500').all().map(p=>({...p,asset_url:p.asset_id?origin+'/social-media/'+p.asset_id:'',targets:db.prepare('SELECT * FROM marketing_targets WHERE post_id=?').all(p.id),registrations:p.campaign?db.prepare('SELECT COUNT(*) n FROM intake_registrations WHERE campaign=?').get(p.campaign).n:0,tracking_url:p.campaign?origin+'/apply?source=website&utm_campaign='+encodeURIComponent(p.campaign):origin+'/apply'}));
  const assets=db.prepare('SELECT id,name,mime,length(content) size,created_at FROM marketing_assets ORDER BY created_at DESC LIMIT 100').all().map(a=>({...a,url:origin+'/social-media/'+a.id}));
  const feed=db.prepare('SELECT * FROM marketing_feed ORDER BY published_at DESC LIMIT 200').all().filter(p=>accounts.some(a=>a.id===p.account_key));
  const videos=db.prepare('SELECT * FROM marketing_saved_videos ORDER BY created_at DESC LIMIT 100').all().filter(p=>accounts.some(a=>a.id===p.account_key));
- return {accounts,posts,assets,feed,videos,timezone:'Africa/Cairo',supported_publish:['facebook','instagram'],totals:{drafts:posts.filter(p=>p.targets.some(t=>t.status==='draft')).length,scheduled:posts.reduce((n,p)=>n+p.targets.filter(t=>['scheduled','processing','publishing'].includes(t.status)).length,0),published:posts.reduce((n,p)=>n+p.targets.filter(t=>t.status==='published').length,0),registrations:db.prepare("SELECT COUNT(*) n FROM intake_registrations WHERE campaign<>'' AND campaign IN(SELECT DISTINCT campaign FROM marketing_posts WHERE campaign<>'')").get().n}};
+ return {accounts,posts,assets,feed,videos,plans:marketingPlans(db),timezone:'Africa/Cairo',supported_publish:['facebook','instagram'],totals:{drafts:posts.filter(p=>p.targets.some(t=>t.status==='draft')).length,scheduled:posts.reduce((n,p)=>n+p.targets.filter(t=>['scheduled','processing','publishing'].includes(t.status)).length,0),published:posts.reduce((n,p)=>n+p.targets.filter(t=>t.status==='published').length,0),registrations:db.prepare("SELECT COUNT(*) n FROM intake_registrations WHERE campaign<>'' AND campaign IN(SELECT DISTINCT campaign FROM marketing_posts WHERE campaign<>'')").get().n}};
 }
 export function saveMarketingAsset(db,user,input,origin){
  access(user);if(typeof input.content!=='string'||input.content.length>7*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(input.content))fail(400,'صورة غير صالحة');
@@ -147,12 +147,92 @@ export async function processMarketingJobs(db,key,base,origin,transport=fetch){
   audit(db,null,'published','marketing_target',target.id,{channel:target.channel});
  }catch(error){update(writeStarted&&!error.definite?'unknown':writeStarted?'failed':previous==='processing'?'processing':'blocked',error.code||'PROVIDER_CONNECTION_FAILED');}
 }
+const cairoDay=stamp=>new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(stamp));
+const addDay=day=>new Date(Date.parse(day+'T12:00:00Z')+86400000).toISOString().slice(0,10);
+function publicationReady(db,a,post,key,checkPermission=true){
+ if(!['facebook','instagram'].includes(a.channel)||a.mode!=='messaging'||!a.config?.active||!a.config.verified_at||checkPermission&&!capability(db,a,key).can_publish)fail(409,'اختر حسابات جاهزة للنشر بعد اختبار صلاحياتها');
+ if(a.channel==='instagram'){
+  const asset=post.asset_id?db.prepare('SELECT mime FROM marketing_assets WHERE id=?').get(post.asset_id):null;
+  if(!post.asset_id&&!post.media_url||asset&&asset.mime!=='image/jpeg')fail(400,'كل محتوى إنستجرام يحتاج صورة JPG عامة');
+  if(post.body.length+post.link_url.length+250>2200)fail(400,'اختصر نصوص إنستجرام إلى أقل من 1950 حرفًا مع الروابط');
+ }
+}
+export function marketingPlans(db){
+ return db.prepare('SELECT * FROM marketing_plans ORDER BY created_at DESC').all().map(p=>({...p,accounts:JSON.parse(p.accounts),templates:JSON.parse(p.templates),weekdays:JSON.parse(p.weekdays),repeat:Boolean(p.repeat),queued:db.prepare("SELECT COUNT(DISTINCT o.post_id) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status IN('scheduled','processing','publishing')").get(p.id).n,next_at:db.prepare("SELECT MIN(t.scheduled_at) stamp FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status='scheduled'").get(p.id).stamp,published:db.prepare("SELECT COUNT(*) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status='published'").get(p.id).n,issues:db.prepare("SELECT COUNT(*) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status IN('blocked','failed','unknown')").get(p.id).n}));
+}
+function cancelPlanQueue(db,id){
+ db.prepare("UPDATE marketing_targets SET status='cancelled',updated_at=? WHERE post_id IN(SELECT post_id FROM marketing_occurrences WHERE plan_id=?) AND status IN('scheduled','draft','blocked','failed','processing')").run(now(),id);
+}
+export function saveMarketingPlan(db,user,input,key,base,origin,id){
+ access(user);const current=id?db.prepare('SELECT * FROM marketing_plans WHERE id=?').get(id):null;if(id&&!current)fail(404,'خطة النشر غير موجودة');
+ if(!current&&db.prepare('SELECT COUNT(*) n FROM marketing_plans').get().n>=10)fail(409,'حد المنصة 10 خطط نشر مستمرة');
+ const name=text(input.name,'اسم الخطة',100),local_time=String(input.local_time||'');if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(local_time))fail(400,'اختر موعدًا صحيحًا بتوقيت القاهرة');
+ const weekdays=input.weekdays;if(!Array.isArray(weekdays)||!weekdays.length||weekdays.length>7||new Set(weekdays).size!==weekdays.length||weekdays.some(d=>!Number.isInteger(d)||d<0||d>6))fail(400,'اختر أيام النشر');
+ if(!Array.isArray(input.accounts)||!input.accounts.length||input.accounts.length>40||new Set(input.accounts).size!==input.accounts.length)fail(400,'اختر حسابات النشر دون تكرار');
+ if(!Array.isArray(input.templates)||!input.templates.length||input.templates.length>60||new Set(input.templates).size!==input.templates.length)fail(400,'اختر من 1 إلى 60 منشورًا لبنك المحتوى');
+ const templates=input.templates.map(id=>{const p=db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(id);if(!p||db.prepare('SELECT 1 FROM marketing_occurrences WHERE post_id=?').get(id))fail(400,'اختر مسودات أصلية لبنك المحتوى');return p;});
+ for(const id of input.accounts){const a=account(db,key,base,origin,id);for(const p of templates)publicationReady(db,a,p,key);}
+ const active=input.active===true;if(active&&input.publish_ack!==true)fail(400,'أكد تشغيل النشر المستمر للمحتوى والحسابات المختارة');
+ const today=cairoDay(Date.now()),next_date=input.start_date||today;
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(next_date)||next_date<today||next_date>cairoDay(Date.now()+366*86400000)||!Number.isFinite(Date.parse(next_date+'T12:00:00Z'))||new Date(next_date+'T12:00:00Z').toISOString().slice(0,10)!==next_date)fail(400,'اختر تاريخ بداية صحيحًا خلال السنة القادمة');
+ const planId=id||uid();transaction(db,()=>{
+  if(current){cancelPlanQueue(db,id);db.prepare('UPDATE marketing_plans SET name=?,state=?,local_time=?,weekdays=?,accounts=?,templates=?,repeat=?,cursor=0,next_date=?,revision=revision+1,last_error=NULL,created_by=?,updated_at=? WHERE id=?').run(name,active?'active':'paused',local_time,JSON.stringify(weekdays),JSON.stringify(input.accounts),JSON.stringify(input.templates),input.repeat===true?1:0,next_date,user.id,now(),id);}
+  else db.prepare('INSERT INTO marketing_plans(id,name,state,local_time,weekdays,accounts,templates,repeat,next_date,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(planId,name,active?'active':'paused',local_time,JSON.stringify(weekdays),JSON.stringify(input.accounts),JSON.stringify(input.templates),input.repeat===true?1:0,next_date,user.id,now(),now());
+  audit(db,user,'configured','marketing_plan',planId,{active,templates:templates.length,accounts:input.accounts.length});
+ });
+ processMarketingPlans(db,key,base,origin);return {id:planId,state:active?'active':'paused'};
+}
+export function setMarketingPlanState(db,user,id,input,key,base,origin){
+ access(user);const plan=db.prepare('SELECT * FROM marketing_plans WHERE id=?').get(id);if(!plan)fail(404,'خطة النشر غير موجودة');
+ if(typeof input.active!=='boolean')fail(400,'اختر تشغيل أو إيقاف الخطة');
+ if(input.active){
+  if(plan.state==='active')return {ok:true};if(input.publish_ack!==true)fail(400,'أكد استئناف النشر');
+  const templates=JSON.parse(plan.templates).map(id=>db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(id));if(templates.some(p=>!p))fail(409,'راجع محتوى الخطة');
+  for(const id of JSON.parse(plan.accounts)){const a=account(db,key,base,origin,id);for(const p of templates)publicationReady(db,a,p,key);}
+  db.prepare("UPDATE marketing_plans SET state='active',next_date=?,revision=revision+1,last_error=NULL,created_by=?,updated_at=? WHERE id=?").run(cairoDay(Date.now()),user.id,now(),id);
+ }else transaction(db,()=>{
+  const first=db.prepare("SELECT MIN(o.position) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND o.revision=? AND t.status='scheduled' AND NOT EXISTS(SELECT 1 FROM marketing_targets s WHERE s.post_id=o.post_id AND s.status IN('published','publishing','processing','unknown'))").get(id,plan.revision).n;
+  cancelPlanQueue(db,id);db.prepare("UPDATE marketing_plans SET state='paused',cursor=?,updated_at=? WHERE id=?").run(first??plan.cursor,now(),id);
+ });
+ audit(db,user,input.active?'resumed':'paused','marketing_plan',id);processMarketingPlans(db,key,base,origin);return {ok:true};
+}
+export function processMarketingPlans(db,key,base,origin,stamp=Date.now()){
+ // Old recurring slots are skipped after downtime; never burst-publish a backlog.
+ db.prepare("UPDATE marketing_targets SET status='blocked',error_code='MISSED_RECURRING_SLOT',updated_at=? WHERE status='scheduled' AND scheduled_at<? AND post_id IN(SELECT post_id FROM marketing_occurrences)").run(new Date(stamp).toISOString(),new Date(stamp-2*3600000).toISOString());
+ const today=cairoDay(stamp),horizon=cairoDay(stamp+14*86400000);
+ for(const plan of db.prepare("SELECT * FROM marketing_plans WHERE state='active'").all()){
+  const creator=db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(plan.created_by);
+  if(!creator||!manager(creator)){transaction(db,()=>{cancelPlanQueue(db,plan.id);db.prepare("UPDATE marketing_plans SET state='paused',last_error='PUBLISHER_ACCESS_REVOKED' WHERE id=?").run(plan.id);});continue;}
+  const templates=JSON.parse(plan.templates),accounts=JSON.parse(plan.accounts),weekdays=JSON.parse(plan.weekdays);
+  let day=plan.next_date<today?today:plan.next_date,cursor=plan.cursor,last_error=null;
+  transaction(db,()=>{
+   for(;day<=horizon;day=addDay(day)){
+    if(!weekdays.includes(new Date(day+'T12:00:00Z').getUTCDay()))continue;
+    let scheduled;try{scheduled=cairoSchedule(day+'T'+plan.local_time);}catch{last_error='INVALID_LOCAL_SLOT';continue;}
+    if(Date.parse(scheduled)<stamp+60000)continue;
+    if(!plan.repeat&&cursor>=templates.length)break;
+    if(db.prepare('SELECT 1 FROM marketing_occurrences WHERE plan_id=? AND revision=? AND local_date=?').get(plan.id,plan.revision,day))continue;
+    const source=db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(templates[cursor%templates.length]);if(!source){last_error='PLAN_CONTENT_MISSING';break;}
+    let selected;try{selected=accounts.map(id=>account(db,key,base,origin,id));for(const a of selected)publicationReady(db,a,source,key,false);}catch{last_error='PLAN_CONTENT_OR_ACCOUNT_INVALID';break;}
+    const postId=uid();db.prepare('INSERT INTO marketing_posts VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(postId,source.title,source.body,source.campaign,source.asset_id,source.media_url,source.link_url,source.include_registration,plan.created_by,new Date(stamp).toISOString(),new Date(stamp).toISOString());
+    db.prepare('INSERT INTO marketing_occurrences VALUES(?,?,?,?,?)').run(plan.id,plan.revision,day,cursor,postId);
+    for(const a of selected)db.prepare("INSERT INTO marketing_targets(id,post_id,account_key,channel,account_id,status,scheduled_at,updated_at) VALUES(?,?,?,?,?,'scheduled',?,?)").run(uid(),postId,a.id,a.channel,a.account_id,scheduled,new Date(stamp).toISOString());
+    cursor++;
+   }
+   db.prepare('UPDATE marketing_plans SET cursor=?,next_date=?,last_error=? WHERE id=?').run(cursor,day,last_error,plan.id);
+  });
+ }
+}
 export async function handleMarketing(ctx){
  const {db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}=ctx;
  const send=(status,value)=>{sendJson(res,status,value);return true;};if(!path.startsWith('/api/marketing'))return false;access(user);
  if(path==='/api/marketing'&&method==='GET')return send(200,marketingData(db,user,secretKey,config,origin));
  if(path==='/api/marketing/assets'&&method==='POST')return send(201,saveMarketingAsset(db,user,await jsonBody(req,8*1024*1024),origin));
  if(path==='/api/marketing/posts'&&method==='POST')return send(201,saveMarketingPost(db,user,await jsonBody(req),secretKey,config,origin));
+ if(path==='/api/marketing/plans'&&method==='POST')return send(201,saveMarketingPlan(db,user,await jsonBody(req),secretKey,config,origin));
+ const plan=path.match(/^\/api\/marketing\/plans\/([^/]+)(?:\/(state))?$/);
+ if(plan&&method==='PATCH'&&!plan[2])return send(200,saveMarketingPlan(db,user,await jsonBody(req),secretKey,config,origin,plan[1]));
+ if(plan&&method==='POST'&&plan[2])return send(200,setMarketingPlanState(db,user,plan[1],await jsonBody(req),secretKey,config,origin));
  const post=path.match(/^\/api\/marketing\/posts\/([^/]+)$/);if(post&&method==='PATCH')return send(200,saveMarketingPost(db,user,await jsonBody(req),secretKey,config,origin,post[1]));
  const sync=path.match(/^\/api\/marketing\/accounts\/([^/]+)\/sync$/);if(sync&&method==='POST')return send(200,await syncMarketingAccount(db,user,sync[1],secretKey,config,origin,transport));
  const target=path.match(/^\/api\/marketing\/targets\/([^/]+)\/(schedule|cancel)$/);

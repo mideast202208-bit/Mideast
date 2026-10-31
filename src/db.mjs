@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { migrate, migrateV3, migrateV4,migrateV5,migrateV6,migrateV7 } from './migrations.mjs';
+import { migrate, migrateV3, migrateV4,migrateV5,migrateV6,migrateV7,migrateV8 } from './migrations.mjs';
 import {normalizeSearch} from './international.mjs';
 
 export function openDatabase(path) {
@@ -97,6 +97,7 @@ export function openDatabase(path) {
   migrateV5(db);
   migrateV6(db);
   migrateV7(db);
+  migrateV8(db);
   db.function('me_search_normalize',{deterministic:true},normalizeSearch);
   return db;
 }

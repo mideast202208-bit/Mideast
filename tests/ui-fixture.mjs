@@ -17,6 +17,6 @@ export async function renderFixture(data=fixture){
     setInterval:()=>0,clearInterval(){},setTimeout:()=>0,
     document:{querySelector:element,addEventListener(){},activeElement:null},
     fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:path.endsWith('/hub')?(data.hub||{}):path.endsWith('/communication')?data.communication:path.endsWith('/assistant')?data.assistant:path.endsWith('/marketing')?data.marketing:data})};
-  const script=new vm.Script(`(async()=>{${source}\nreturn {pageAsync:async(key)=>{page=key;await load();return document.querySelector('#app').innerHTML;},page:(key)=>{page=key;render();return document.querySelector('#app').innerHTML;},studio:(entity)=>{studioEntity=entity;page='studio';render();return document.querySelector('#app').innerHTML;}};})()`);
+  const script=new vm.Script(`(async()=>{${source}\nreturn {marketingTab:async(tab)=>{page='marketing';await load();await marketing.action('marketing-tab',tab);return document.querySelector('#app').innerHTML;},pageAsync:async(key)=>{page=key;await load();return document.querySelector('#app').innerHTML;},page:(key)=>{page=key;render();return document.querySelector('#app').innerHTML;},studio:(entity)=>{studioEntity=entity;page='studio';render();return document.querySelector('#app').innerHTML;}};})()`);
   return script.runInNewContext(sandbox);
 }

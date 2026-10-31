@@ -1,3 +1,13 @@
+export function migrateV8(db){
+ if(db.prepare('SELECT 1 FROM schema_versions WHERE version=8').get())return;
+ db.exec('BEGIN IMMEDIATE');
+ try{db.exec(`
+ CREATE TABLE marketing_plans(id TEXT PRIMARY KEY,name TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('active','paused')),local_time TEXT NOT NULL,weekdays TEXT NOT NULL,accounts TEXT NOT NULL,templates TEXT NOT NULL,repeat INTEGER NOT NULL DEFAULT 1,cursor INTEGER NOT NULL DEFAULT 0,next_date TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,last_error TEXT,created_by TEXT NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+ CREATE TABLE marketing_occurrences(plan_id TEXT NOT NULL REFERENCES marketing_plans(id),revision INTEGER NOT NULL,local_date TEXT NOT NULL,position INTEGER NOT NULL,post_id TEXT NOT NULL UNIQUE REFERENCES marketing_posts(id),PRIMARY KEY(plan_id,revision,local_date));
+ CREATE INDEX marketing_plan_posts ON marketing_occurrences(plan_id,position);
+ INSERT INTO schema_versions VALUES(8);
+ `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+}
 export function migrateV7(db){
  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=7').get())return;
  db.exec('BEGIN IMMEDIATE');
