@@ -7,7 +7,7 @@ const marketingDays=['الأحد','الاثنين','الثلاثاء','الأر�
 export function createMarketing(ctx){
  const {api,escape:e,modal,bindForm,toast,render,getUser,navigate}=ctx;
  let data=null,tab=ctx.initialTab||'streams',chosen='all',syncing=false,playing=new Set();
- const button=(label,action,id='',primary=false)=>'<button class="btn '+(primary?'primary':'')+'" data-action="marketing-'+action+'" data-id="'+e(id)+'">'+label+'</button>';
+ const button=(label,action,id='',primary=false)=>'<button class="btn '+(primary?'primary':'')+'" data-action="marketing-'+action+'" data-id="'+e(id)+'">'+(label.startsWith('＋')?brandIcon('add',16)+' '+label.slice(1).trim():label)+'</button>';
  const date=value=>value?new Date(value).toLocaleString('ar-EG',{timeZone:'Africa/Cairo',dateStyle:'medium',timeStyle:'short'}):'بدون موعد';
  const accountName=id=>data?.accounts.find(a=>a.id===id)?.name||'الحساب غير متاح';
  const errorLabel=code=>marketingErrors[code]||code||'';
