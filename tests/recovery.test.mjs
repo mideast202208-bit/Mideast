@@ -61,3 +61,18 @@ test('a new app instance reopens persistent data without an empty database or lo
  const f=await fixture();f.db.close();let db=openDatabase(f.path),app=createApp({db,secretKey:key,env:{RECOVERY_MODE:'1',PUBLIC_ORIGIN:'http://127.0.0.1:3000'}});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));await new Promise(r=>app.server.close(r));db.close();
  db=openDatabase(f.path);try{assert.equal(db.prepare('SELECT COUNT(*) n FROM contacts').get().n,1);assert.equal(db.prepare('SELECT COUNT(*) n FROM attachments').get().n,1);assert.equal(decryptSecret(db.prepare("SELECT value FROM settings WHERE key='wa.accessToken'").get().value,key),'synthetic-secret-not-real');assert.equal(db.prepare('PRAGMA quick_check').get().quick_check,'ok');}finally{db.close();rmSync(f.folder,{recursive:true,force:true});}
 });
+test('an explicit temporary CRM domain can sign in during DNS transition while foreign origins remain rejected',async()=>{
+ const f=await fixture(),app=createApp({db:f.db,secretKey:key,env:{NODE_ENV:'production',PUBLIC_ORIGIN:'https://current.example.test',ADDITIONAL_ORIGINS:'https://crm.example.test',RECOVERY_MODE:'1'}});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+app.server.address().port;
+ try{for(const [origin,status] of [['https://current.example.test',200],['https://crm.example.test',200],['https://foreign.example.test',403]]){const response=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify({email:'owner@example.test',password:'Synthetic-recovery-only-2026!'})});assert.equal(response.status,status);}
+  assert.throws(()=>createApp({db:f.db,secretKey:key,env:{NODE_ENV:'production',PUBLIC_ORIGIN:'https://current.example.test',ADDITIONAL_ORIGINS:'https://*.example.test'}}),/INVALID_ADDITIONAL_ORIGIN/);
+ }finally{await new Promise(r=>app.server.close(r));f.db.close();rmSync(f.folder,{recursive:true,force:true});}
+});
+test('a pending migration is blocked without encryption and takes a consistent encrypted pre-migration snapshot before changing schema',async()=>{
+ const f=await fixture();try{
+  f.db.exec('DROP TABLE marketing_occurrences; DROP TABLE marketing_plans; DELETE FROM schema_versions WHERE version=8;');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
+  await assert.rejects(()=>startupPreflight(env),/MIGRATION_REQUIRES_ENCRYPTED_BACKUP/);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,7);
+  const preflight=await startupPreflight({...env,BACKUP_PUBLIC_KEY:keys.publicKey});assert.equal(preflight.migration_pending,true);assert.ok(preflight.backup.sha256);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,7);
+  const restored=await restoreRecoveryBundle(join(env.BACKUP_DIR,preflight.backup.filename),join(f.folder,'pre-migration-restore'),keys.privateKey);assert.equal(restored.schema_version,7);assert.equal(restored.table_counts.attachments,1);
+  f.db.exec('INSERT INTO schema_versions VALUES(9)');await assert.rejects(()=>startupPreflight(env),/DATABASE_NEWER_THAN_APPLICATION/);
+ }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
+});

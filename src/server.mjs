@@ -38,6 +38,11 @@ export function createApp(options = {}) {
   const transport=env.RECOVERY_MODE==='1'?async()=>{fail(409,'RECOVERY_OUTBOUND_BLOCKED');}:options.transport||fetch;
   const origin = env.PUBLIC_ORIGIN || env.RENDER_EXTERNAL_URL || 'http://127.0.0.1:3000';
   if (production && !origin.startsWith('https://')) throw new Error('Production requires HTTPS PUBLIC_ORIGIN');
+  const allowedOrigins=new Set([new URL(origin).origin]);
+  for(const value of String(env.ADDITIONAL_ORIGINS||'').split(',').map(s=>s.trim()).filter(Boolean)){
+    let u;try{u=new URL(value);}catch{throw new Error('INVALID_ADDITIONAL_ORIGIN');}
+    if(u.username||u.password||u.pathname!=='/'||u.search||u.hash||u.hostname.includes('*')||!['https:','http:'].includes(u.protocol)||production&&u.protocol!=='https:')throw new Error('INVALID_ADDITIONAL_ORIGIN');allowedOrigins.add(u.origin);
+  }
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
   recoverMarketingJobs(db);
@@ -119,7 +124,7 @@ export function createApp(options = {}) {
       const write=!['GET','HEAD'].includes(method);
       let developmentSameHost=false;
       if(!production&&req.headers.origin){try{developmentSameHost=new URL(req.headers.origin).host===req.headers.host;}catch{}}
-      if(write && req.headers.origin && req.headers.origin!==origin && !developmentSameHost)fail(403,'المصدر غير مسموح');
+      if(write && req.headers.origin && !allowedOrigins.has(req.headers.origin) && !developmentSameHost)fail(403,'المصدر غير مسموح');
       if(path==='/api/setup/status'&&method==='GET'){
         sendJson(res,200,{required:!db.prepare('SELECT id FROM users LIMIT 1').get(),browser_setup:Boolean(env.BOOTSTRAP_TOKEN&&env.BOOTSTRAP_TOKEN.length>=32)});return;
       }
