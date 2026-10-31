@@ -60,7 +60,8 @@ test('website form from a signed social contact link reuses its active enquiry a
 for(const channel of ['whatsapp','facebook','instagram'])test(channel+': student name/phone/file lookup remains staff-scoped; an external message naming another student never reveals their dossier',async()=>{
  const f=await inboundFixture({followup:false});try{
   const c=f.seedContact('whatsapp');createRegistration(f.db,f.registration(),f.key,f.origin);const r=f.db.prepare('SELECT * FROM intake_registrations').get();
-  for(const q of ['Synthetic student',syntheticPhone,r.reference])assert.equal(findStudents(f.db,f.users.assigned,q).length,1);
+  for(const q of ['Synthetic student',r.reference])assert.equal(findStudents(f.db,f.users.assigned,q).length,1);
+  assert.equal(findStudents(f.db,f.users.assigned,syntheticPhone).length,0);assert.equal(findStudents(f.db,f.users.owner,syntheticPhone).length,1);
   assert.equal(findStudents(f.db,f.users.intake,r.reference).length,0);assert.throws(()=>studentDossier(f.db,f.users.intake,r.student_id),e=>e.status===404);
   assert.equal((await fetch(f.base+'/api/communication/students/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:r.reference})})).status,401);
   await f.post(channel,f.payload(channel,'synthetic-other-sender','اسمي Synthetic student ورقم ملفي '+r.reference,channel==='whatsapp'?'201000000088':'901'));f.drain();

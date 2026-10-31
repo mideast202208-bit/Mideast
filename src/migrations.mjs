@@ -145,3 +145,18 @@ export function migrateV4(db){
     INSERT INTO schema_versions VALUES(4);
   `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
 }
+export function migrateV9(db){
+  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=9').get())return;
+  db.exec('BEGIN IMMEDIATE');
+  try{db.exec(`
+    CREATE TABLE customer_email_jobs(
+      id TEXT PRIMARY KEY,contact_id TEXT NOT NULL REFERENCES contacts(id),created_by TEXT NOT NULL REFERENCES users(id),
+      request_key TEXT NOT NULL,recipient_cipher TEXT NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN('queued','sending','accepted','error','unknown')),
+      provider_id TEXT,error_code TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+      UNIQUE(created_by,request_key));
+    CREATE INDEX customer_email_contact ON customer_email_jobs(contact_id,created_at);
+    CREATE INDEX customer_email_queue ON customer_email_jobs(status,created_at);
+    INSERT INTO schema_versions VALUES(9);
+  `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+}

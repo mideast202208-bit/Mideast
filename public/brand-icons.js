@@ -1,4 +1,7 @@
 const paths={
+ email:'M3 5h18v14H3z M3 6l9 7 9-7',
+ history:'M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v6l4 2',
+ shield:'M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6z M8 12l3 3 5-6',
  marketing:'M3 10l13-6v16L3 14z M6 15l2 6h4l-2-5 M20 7l2-2 M20 17l2 2 M20 12h3',
  dashboard:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
  communications:'M4 4h16v12H9l-5 4z M8 8h8 M8 12h5',
