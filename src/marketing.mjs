@@ -1,3 +1,4 @@
+import {marketingReview,marketingReadiness,marketingReviewRequired,assertMarketingApproved,setMarketingReview,setMarketingReviewPolicy} from './marketing-review.mjs';
 import {uid,now,fail,text,audit,manager} from './service.mjs';
 import {transaction} from './db.mjs';
 import {accountSummary} from './accounts.mjs';
@@ -77,11 +78,11 @@ function capability(db,a,key){
 }
 export function marketingData(db,user,key,base,origin){
  access(user);const accounts=accountSummary(db,base,origin).filter(a=>socialChannels.includes(a.channel)).map(a=>({...a,marketing:capability(db,a,key)}));
- const posts=db.prepare('SELECT p.*,o.plan_id,o.local_date FROM marketing_posts p LEFT JOIN marketing_occurrences o ON o.post_id=p.id WHERE o.plan_id IS NULL OR p.id IN(SELECT post_id FROM marketing_occurrences ORDER BY rowid DESC LIMIT 500) ORDER BY p.updated_at DESC').all().map(p=>({...p,asset_url:p.asset_id?origin+'/social-media/'+p.asset_id:'',targets:db.prepare('SELECT * FROM marketing_targets WHERE post_id=?').all(p.id),registrations:p.campaign?db.prepare('SELECT COUNT(*) n FROM intake_registrations WHERE campaign=?').get(p.campaign).n:0,tracking_url:p.campaign?origin+'/apply?source=website&utm_campaign='+encodeURIComponent(p.campaign):origin+'/apply'}));
+ const posts=db.prepare('SELECT p.*,o.plan_id,o.local_date FROM marketing_posts p LEFT JOIN marketing_occurrences o ON o.post_id=p.id WHERE o.plan_id IS NULL OR p.id IN(SELECT post_id FROM marketing_occurrences ORDER BY rowid DESC LIMIT 500) ORDER BY p.updated_at DESC').all().map(p=>({...p,review:marketingReview(db,p.id),asset_url:p.asset_id?origin+'/social-media/'+p.asset_id:'',targets:db.prepare('SELECT * FROM marketing_targets WHERE post_id=?').all(p.id),registrations:p.campaign?db.prepare('SELECT COUNT(*) n FROM intake_registrations WHERE campaign=?').get(p.campaign).n:0,tracking_url:p.campaign?origin+'/apply?source=website&utm_campaign='+encodeURIComponent(p.campaign):origin+'/apply'}));
  const assets=db.prepare('SELECT id,name,mime,length(content) size,created_at FROM marketing_assets ORDER BY created_at DESC LIMIT 100').all().map(a=>({...a,url:origin+'/social-media/'+a.id}));
  const feed=db.prepare('SELECT * FROM marketing_feed ORDER BY published_at DESC LIMIT 200').all().filter(p=>accounts.some(a=>a.id===p.account_key));
  const videos=db.prepare('SELECT * FROM marketing_saved_videos ORDER BY created_at DESC LIMIT 100').all().filter(p=>accounts.some(a=>a.id===p.account_key));
- return {accounts,posts,assets,feed,videos,plans:marketingPlans(db),timezone:'Africa/Cairo',supported_publish:['facebook','instagram'],totals:{drafts:db.prepare("SELECT COUNT(DISTINCT post_id) n FROM marketing_targets WHERE status='draft'").get().n,scheduled:db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status IN('scheduled','processing','publishing')").get().n,published:db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='published'").get().n,registrations:db.prepare("SELECT COUNT(*) n FROM intake_registrations WHERE campaign<>'' AND campaign IN(SELECT DISTINCT campaign FROM marketing_posts WHERE campaign<>'')").get().n}};
+ return {accounts,posts,assets,feed,videos,review_policy:{required:marketingReviewRequired(db)},readiness:marketingReadiness(accounts),plans:marketingPlans(db),timezone:'Africa/Cairo',supported_publish:['facebook','instagram'],totals:{drafts:db.prepare("SELECT COUNT(DISTINCT post_id) n FROM marketing_targets WHERE status='draft'").get().n,scheduled:db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status IN('scheduled','processing','publishing')").get().n,published:db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='published'").get().n,registrations:db.prepare("SELECT COUNT(*) n FROM intake_registrations WHERE campaign<>'' AND campaign IN(SELECT DISTINCT campaign FROM marketing_posts WHERE campaign<>'')").get().n}};
 }
 export function saveMarketingAsset(db,user,input,origin){
  access(user);if(typeof input.content!=='string'||input.content.length>7*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(input.content))fail(400,'صورة غير صالحة');
@@ -112,6 +113,7 @@ export function scheduleMarketingTarget(db,user,id,input,key,base,origin){
  if(a.account_id!==target.account_id||a.channel!==target.channel)fail(409,'تغير الحساب؛ احفظ مسودة جديدة');
  if(!['facebook','instagram'].includes(a.channel)||a.mode!=='messaging')fail(409,'النشر المباشر غير متصل لهذه القناة؛ التخطيط ومكتبة الفيديو متاحان');
  if(!capability(db,a,key).can_publish||!cfg?.active||!cfg.verified_at)fail(409,'اختبر صلاحيات النشر لهذا الحساب وأكمل التفويض أولًا');
+ assertMarketingApproved(db,target.post_id);
  const post=db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(target.post_id),asset=post.asset_id?db.prepare('SELECT mime FROM marketing_assets WHERE id=?').get(post.asset_id):null;
  if(a.channel==='instagram'&&(!post.asset_id&&!post.media_url))fail(400,'إنستجرام يحتاج صورة JPG عامة؛ النص وحده غير كافٍ');
  if(a.channel==='instagram'&&(asset&&asset.mime!=='image/jpeg'))fail(400,'استخدم صورة JPG للنشر على إنستجرام');
@@ -129,6 +131,7 @@ export async function processMarketingJobs(db,key,base,origin,transport=fetch){
  try{
   const post=db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(target.post_id),creator=db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(post.created_by);
   if(!creator||!manager(creator)){update('blocked','PUBLISHER_ACCESS_REVOKED');return;}
+  if(marketingReviewRequired(db)&&marketingReview(db,post.id).state!=='approved'){update('blocked','OWNER_REVIEW_REQUIRED');return;}
   const a=account(db,key,base,origin,target.account_key),cfg=a.config;
   if(a.mode==='messaging'&&cfg?.active&&cfg.verified_at&&!capability(db,a,key).can_publish)await syncMarketingAccount(db,creator,a.id,key,base,origin,transport);
   if(a.account_id!==target.account_id||a.channel!==target.channel||!cfg?.active||!cfg.verified_at||!capability(db,a,key).can_publish){update('blocked','PUBLISH_PERMISSION_REQUIRED');return;}
@@ -231,6 +234,8 @@ export async function handleMarketing(ctx){
  const {db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}=ctx;
  const send=(status,value)=>{sendJson(res,status,value);return true;};if(!path.startsWith('/api/marketing'))return false;access(user);
  if(path==='/api/marketing'&&method==='GET')return send(200,marketingData(db,user,secretKey,config,origin));
+ if(path==='/api/marketing/review-policy'&&method==='POST')return send(200,setMarketingReviewPolicy(db,user,await jsonBody(req)));
+ const review=path.match(/^\/api\/marketing\/posts\/([^/]+)\/review$/);if(review&&method==='POST')return send(200,setMarketingReview(db,user,review[1],await jsonBody(req)));
  if(path==='/api/marketing/assets'&&method==='POST')return send(201,saveMarketingAsset(db,user,await jsonBody(req,8*1024*1024),origin));
  if(path==='/api/marketing/posts'&&method==='POST')return send(201,saveMarketingPost(db,user,await jsonBody(req),secretKey,config,origin));
  if(path==='/api/marketing/plans'&&method==='POST')return send(201,saveMarketingPlan(db,user,await jsonBody(req),secretKey,config,origin));
