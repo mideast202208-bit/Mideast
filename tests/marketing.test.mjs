@@ -145,3 +145,10 @@ test('recurrence binds the approved provider identity; replacing a primary page 
   setMarketingPlanState(db,users.admin,plan.id,{active:false},key,base,origin);assert.throws(()=>setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin),e=>e.status===409);
  }finally{db.close();}
 });
+test('long-running plans retain the original content bank beyond the recent occurrence window',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
+  const plan=saveMarketingPlan(db,users.admin,planInput(posts.map(p=>p.id)),key,base,origin);
+  for(let i=0;i<505;i++){const id=uid();db.prepare('INSERT INTO marketing_posts SELECT ?,title,body,campaign,asset_id,media_url,link_url,include_registration,created_by,created_at,updated_at FROM marketing_posts WHERE id=?').run(id,posts[0].id);db.prepare('INSERT INTO marketing_occurrences VALUES(?,?,?,?,?)').run(plan.id,99,'fixture-'+i,i,id);}
+  const d=marketingData(db,users.admin,key,base,origin);for(const p of posts)assert.ok(d.posts.some(b=>b.id===p.id));assert.equal(d.posts.filter(p=>p.plan_id).length,500);
+ }finally{db.close();}
+});
