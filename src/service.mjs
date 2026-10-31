@@ -23,6 +23,18 @@ export function getContact(db, user, id) {
   if (!contact || (!manager(user) && contact.owner_id !== user.id)) fail(404, 'العميل غير موجود أو غير متاح');
   return contact;
 }
+// Called inside the inbound event transaction, after provider-message deduplication.
+// A returning customer needs one open enquiry, never a reopened closed opportunity.
+export function ensureInboundLead(db,contact,source){
+  const current=db.prepare("SELECT * FROM leads WHERE contact_id=? AND stage NOT IN('won','lost') ORDER BY created_at DESC,rowid DESC LIMIT 1").get(contact.id);
+  if(current)return current;
+  const label={whatsapp:'واتساب',facebook:'فيسبوك',instagram:'إنستجرام'}[source]||'القنوات';
+  const lead={id:uid(),contact_id:contact.id,title:'استفسار '+label+' — '+contact.name,owner_id:contact.owner_id,stage:'new',source};
+  db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(lead.id,contact.id,lead.title,'new',0,lead.owner_id,'{}',now(),now());
+  runAutomations(db,'lead.created',lead,lead.id);
+  audit(db,null,'inbound_created','lead',lead.id,{source});
+  return lead;
+}
 export function owner(db, user, requested) {
   const target = requested || user.id;
   if (!manager(user) && target !== user.id) fail(403, 'إسناد الموظفين متاح للإدارة');
