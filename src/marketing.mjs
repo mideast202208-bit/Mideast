@@ -158,7 +158,11 @@ function publicationReady(db,a,post,key,checkPermission=true){
  }
 }
 export function marketingPlans(db){
- return db.prepare('SELECT * FROM marketing_plans ORDER BY created_at DESC').all().map(p=>({...p,accounts:JSON.parse(p.accounts),templates:JSON.parse(p.templates),weekdays:JSON.parse(p.weekdays),repeat:Boolean(p.repeat),queued:db.prepare("SELECT COUNT(DISTINCT o.post_id) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status IN('scheduled','processing','publishing')").get(p.id).n,next_at:db.prepare("SELECT MIN(t.scheduled_at) stamp FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status='scheduled'").get(p.id).stamp,published:db.prepare("SELECT COUNT(*) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status='published'").get(p.id).n,issues:db.prepare("SELECT COUNT(*) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status IN('blocked','failed','unknown')").get(p.id).n}));
+ return db.prepare('SELECT * FROM marketing_plans ORDER BY created_at DESC').all().map(p=>({...p,accounts:JSON.parse(p.accounts).map(a=>typeof a==='string'?a:a.key),templates:JSON.parse(p.templates),weekdays:JSON.parse(p.weekdays),repeat:Boolean(p.repeat),queued:db.prepare("SELECT COUNT(DISTINCT o.post_id) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status IN('scheduled','processing','publishing')").get(p.id).n,next_at:db.prepare("SELECT MIN(t.scheduled_at) stamp FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status='scheduled'").get(p.id).stamp,published:db.prepare("SELECT COUNT(*) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status='published'").get(p.id).n,issues:db.prepare("SELECT COUNT(*) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND t.status IN('blocked','failed','unknown')").get(p.id).n}));
+}
+function boundPlanAccount(db,key,base,origin,binding){
+ if(!binding||typeof binding!=='object')fail(409,'احفظ الخطة مجددًا لتأكيد هويات حساباتها');
+ const a=account(db,key,base,origin,binding.key);if(a.account_id!==binding.account_id||a.channel!==binding.channel)fail(409,'تغيّرت هوية حساب في الخطة؛ راجع الحسابات واحفظها مجددًا');return a;
 }
 function cancelPlanQueue(db,id){
  db.prepare("UPDATE marketing_targets SET status='cancelled',updated_at=? WHERE post_id IN(SELECT post_id FROM marketing_occurrences WHERE plan_id=?) AND status IN('scheduled','draft','blocked','failed','processing')").run(now(),id);
@@ -171,13 +175,13 @@ export function saveMarketingPlan(db,user,input,key,base,origin,id){
  if(!Array.isArray(input.accounts)||!input.accounts.length||input.accounts.length>40||new Set(input.accounts).size!==input.accounts.length)fail(400,'اختر حسابات النشر دون تكرار');
  if(!Array.isArray(input.templates)||!input.templates.length||input.templates.length>60||new Set(input.templates).size!==input.templates.length)fail(400,'اختر من 1 إلى 60 منشورًا لبنك المحتوى');
  const templates=input.templates.map(id=>{const p=db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(id);if(!p||db.prepare('SELECT 1 FROM marketing_occurrences WHERE post_id=?').get(id))fail(400,'اختر مسودات أصلية لبنك المحتوى');return p;});
- for(const id of input.accounts){const a=account(db,key,base,origin,id);for(const p of templates)publicationReady(db,a,p,key);}
+ const bindings=input.accounts.map(id=>{const a=account(db,key,base,origin,id);for(const p of templates)publicationReady(db,a,p,key);return {key:a.id,account_id:a.account_id,channel:a.channel};});
  const active=input.active===true;if(active&&input.publish_ack!==true)fail(400,'أكد تشغيل النشر المستمر للمحتوى والحسابات المختارة');
  const today=cairoDay(Date.now()),next_date=input.start_date||today;
  if(!/^\d{4}-\d{2}-\d{2}$/.test(next_date)||next_date<today||next_date>cairoDay(Date.now()+366*86400000)||!Number.isFinite(Date.parse(next_date+'T12:00:00Z'))||new Date(next_date+'T12:00:00Z').toISOString().slice(0,10)!==next_date)fail(400,'اختر تاريخ بداية صحيحًا خلال السنة القادمة');
  const planId=id||uid();transaction(db,()=>{
-  if(current){cancelPlanQueue(db,id);db.prepare('UPDATE marketing_plans SET name=?,state=?,local_time=?,weekdays=?,accounts=?,templates=?,repeat=?,cursor=0,next_date=?,revision=revision+1,last_error=NULL,created_by=?,updated_at=? WHERE id=?').run(name,active?'active':'paused',local_time,JSON.stringify(weekdays),JSON.stringify(input.accounts),JSON.stringify(input.templates),input.repeat===true?1:0,next_date,user.id,now(),id);}
-  else db.prepare('INSERT INTO marketing_plans(id,name,state,local_time,weekdays,accounts,templates,repeat,next_date,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(planId,name,active?'active':'paused',local_time,JSON.stringify(weekdays),JSON.stringify(input.accounts),JSON.stringify(input.templates),input.repeat===true?1:0,next_date,user.id,now(),now());
+  if(current){cancelPlanQueue(db,id);db.prepare('UPDATE marketing_plans SET name=?,state=?,local_time=?,weekdays=?,accounts=?,templates=?,repeat=?,cursor=0,next_date=?,revision=revision+1,last_error=NULL,created_by=?,updated_at=? WHERE id=?').run(name,active?'active':'paused',local_time,JSON.stringify(weekdays),JSON.stringify(bindings),JSON.stringify(input.templates),input.repeat===true?1:0,next_date,user.id,now(),id);}
+  else db.prepare('INSERT INTO marketing_plans(id,name,state,local_time,weekdays,accounts,templates,repeat,next_date,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(planId,name,active?'active':'paused',local_time,JSON.stringify(weekdays),JSON.stringify(bindings),JSON.stringify(input.templates),input.repeat===true?1:0,next_date,user.id,now(),now());
   audit(db,user,'configured','marketing_plan',planId,{active,templates:templates.length,accounts:input.accounts.length});
  });
  processMarketingPlans(db,key,base,origin);return {id:planId,state:active?'active':'paused'};
@@ -188,7 +192,7 @@ export function setMarketingPlanState(db,user,id,input,key,base,origin){
  if(input.active){
   if(plan.state==='active')return {ok:true};if(input.publish_ack!==true)fail(400,'أكد استئناف النشر');
   const templates=JSON.parse(plan.templates).map(id=>db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(id));if(templates.some(p=>!p))fail(409,'راجع محتوى الخطة');
-  for(const id of JSON.parse(plan.accounts)){const a=account(db,key,base,origin,id);for(const p of templates)publicationReady(db,a,p,key);}
+  for(const binding of JSON.parse(plan.accounts)){const a=boundPlanAccount(db,key,base,origin,binding);for(const p of templates)publicationReady(db,a,p,key);}
   db.prepare("UPDATE marketing_plans SET state='active',next_date=?,revision=revision+1,last_error=NULL,created_by=?,updated_at=? WHERE id=?").run(cairoDay(Date.now()),user.id,now(),id);
  }else transaction(db,()=>{
   const first=db.prepare("SELECT MIN(o.position) n FROM marketing_occurrences o JOIN marketing_targets t ON t.post_id=o.post_id WHERE o.plan_id=? AND o.revision=? AND t.status='scheduled' AND NOT EXISTS(SELECT 1 FROM marketing_targets s WHERE s.post_id=o.post_id AND s.status IN('published','publishing','processing','unknown'))").get(id,plan.revision).n;
@@ -213,7 +217,7 @@ export function processMarketingPlans(db,key,base,origin,stamp=Date.now()){
     if(!plan.repeat&&cursor>=templates.length)break;
     if(db.prepare('SELECT 1 FROM marketing_occurrences WHERE plan_id=? AND revision=? AND local_date=?').get(plan.id,plan.revision,day))continue;
     const source=db.prepare('SELECT * FROM marketing_posts WHERE id=?').get(templates[cursor%templates.length]);if(!source){last_error='PLAN_CONTENT_MISSING';break;}
-    let selected;try{selected=accounts.map(id=>account(db,key,base,origin,id));for(const a of selected)publicationReady(db,a,source,key,false);}catch{last_error='PLAN_CONTENT_OR_ACCOUNT_INVALID';break;}
+    let selected;try{selected=accounts.map(binding=>boundPlanAccount(db,key,base,origin,binding));for(const a of selected)publicationReady(db,a,source,key,false);}catch{last_error='PLAN_CONTENT_OR_ACCOUNT_INVALID';break;}
     const postId=uid();db.prepare('INSERT INTO marketing_posts VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(postId,source.title,source.body,source.campaign,source.asset_id,source.media_url,source.link_url,source.include_registration,plan.created_by,new Date(stamp).toISOString(),new Date(stamp).toISOString());
     db.prepare('INSERT INTO marketing_occurrences VALUES(?,?,?,?,?)').run(plan.id,plan.revision,day,cursor,postId);
     for(const a of selected)db.prepare("INSERT INTO marketing_targets(id,post_id,account_key,channel,account_id,status,scheduled_at,updated_at) VALUES(?,?,?,?,?,'scheduled',?,?)").run(uid(),postId,a.id,a.channel,a.account_id,scheduled,new Date(stamp).toISOString());

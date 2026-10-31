@@ -15,6 +15,6 @@ export function resolveRegistrationLink(value,key){
   if(stamp<=time||stamp>time+8*86400)fail(410,'انتهت صلاحية رابط التسجيل؛ تواصل مع الفريق للحصول على رابط جديد');
   const expected=createHmac('sha256',key).update('intake-create-v1:'+match[1]+'.'+match[2]).digest();
   const actual=Buffer.from(match[3],'base64url');
-  if(actual.length!==expected.length||!timingSafeEqual(actual,expected))fail(400,'رابط التسجيل غير صالح');
+  if(actual.length!==expected.length||actual.toString('base64url')!==match[3]||!timingSafeEqual(actual,expected))fail(400,'رابط التسجيل غير صالح');
   return match[1];
 }

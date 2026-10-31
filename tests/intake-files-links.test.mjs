@@ -18,6 +18,8 @@ test('twelve registration files and a conversation link stay attached to one pro
     const enquiry=createLead(db,owner,{contact_id:contact.id,title:'استفسار عميل فيسبوك تجريبي'});
     const link=new URL(registrationLink(contact.id,'facebook',key,'https://crm.example.test'));
     const linkToken=link.searchParams.get('client');assert.equal(resolveRegistrationLink(linkToken,key),contact.id);
+    const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_',last=alphabet.indexOf(linkToken.at(-1));
+    assert.throws(()=>resolveRegistrationLink(linkToken.slice(0,-1)+alphabet[last+1],key),e=>e.status===400);
     assert.throws(()=>resolveRegistrationLink(linkToken.slice(0,-1)+(linkToken.endsWith('A')?'B':'A'),key),e=>e.status===400);
     assert.throws(()=>resolveRegistrationLink(linkToken.replace(/\.\d{10}\./,'.1000000000.'),key),e=>e.status===410);
     const files=Array.from({length:12},(_,i)=>({name:'synthetic-'+i+'.pdf',mime:'application/pdf',content:Buffer.from('%PDF-1.7\nSynthetic fixture '+i).toString('base64')}));

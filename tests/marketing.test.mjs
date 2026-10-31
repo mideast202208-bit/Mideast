@@ -137,3 +137,11 @@ test('the continuous-publishing tab shows real plan status, pause controls and e
   saveMarketingPlan(db,users.admin,{...planInput(posts.map(p=>p.id)),name:'<script>unsafe</script>'},key,base,origin);const data=structuredClone(uiFixture);data.marketing=marketingData(db,users.admin,key,base,origin);const ui=await renderFixture(data),html=await ui.marketingTab('plans');assert.match(html,/إيقاف النشر القادم/);assert.match(html,/20:00/);assert.match(html,/&lt;script&gt;/);assert.ok(!html.includes('<script>unsafe'));assert.match(html,/تيك توك ويوتيوب يحتاجان صلاحيات/);assert.ok(!html.includes('undefined'));
  }finally{db.close();}
 });
+test('recurrence binds the approved provider identity; replacing a primary page cannot redirect future posts',async()=>{
+ const f=await recurringFixture(),{db,key,users,base,origin,posts,mock}=f;try{
+  const plan=saveMarketingPlan(db,users.admin,planInput(posts.map(p=>p.id)),key,base,origin),count=db.prepare('SELECT COUNT(*) n FROM marketing_occurrences').get().n;
+  saveChannel(db,users.admin,'facebook',{account_id:'999',active:true},key);db.prepare('UPDATE channel_accounts SET verified_at=? WHERE channel=?').run(now(),'facebook');await syncMarketingAccount(db,users.admin,'primary-facebook',key,base,origin,mock.transport);
+  processMarketingPlans(db,key,base,origin,Date.now()+7*86400000);assert.equal(db.prepare('SELECT COUNT(*) n FROM marketing_occurrences').get().n,count);assert.equal(marketingPlans(db)[0].last_error,'PLAN_CONTENT_OR_ACCOUNT_INVALID');
+  setMarketingPlanState(db,users.admin,plan.id,{active:false},key,base,origin);assert.throws(()=>setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin),e=>e.status===409);
+ }finally{db.close();}
+});
