@@ -3,3 +3,9 @@ backups/
 .env
 *.log
 node_modules/
+
+*.mebak
+*.pem
+*.key
+.env.recovery
+recovery-output/

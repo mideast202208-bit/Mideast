@@ -1,0 +1,15 @@
+name: External CRM availability check
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+permissions: {}
+jobs:
+  check:
+    if: vars.CRM_MONITORING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check public readiness without user data or login
+        run: curl --fail --silent --show-error --max-time 20 --retry 1 https://mid-east-platform.onrender.com/health
+# GitHub scheduling can be delayed; this is not a real-time uptime SLA.
