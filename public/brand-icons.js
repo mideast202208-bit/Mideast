@@ -1,4 +1,5 @@
 const paths={
+ marketing:'M3 10l13-6v16L3 14z M6 15l2 6h4l-2-5 M20 7l2-2 M20 17l2 2 M20 12h3',
  dashboard:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
  communications:'M4 4h16v12H9l-5 4z M8 8h8 M8 12h5',
  assistant:'M12 3v3 M9 3h6 M5 8h14v12H5z M9 12v2 M15 12v2 M9 17h6 M2 11v5 M22 11v5',
@@ -15,6 +16,8 @@ const paths={
  settings:'M4 6h16 M4 12h16 M4 18h16 M8 3v6 M16 9v6 M10 15v6',
  whatsapp:'M20 11a8 8 0 0 1-12 7l-5 2 2-5A8 8 0 1 1 20 11 M9 7c0 4 2 6 6 7',
  facebook:'M15 3h-3a4 4 0 0 0-4 4v14 M5 10h11 M12 7h4',
+ tiktok:'M14 3v12a5 5 0 1 1-4-5 M14 3c1 4 4 5 7 5v4c-3 0-5-1-7-3',
+ youtube:'M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2 M10 9l6 3-6 3z',
  instagram:'M7 3h10a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4 M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8 M17 6h.01'
 };
 export function brandIcon(name,size=22){return '<svg class="brand-icon" width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+(paths[name]||paths.settings)+'"/></svg>';}

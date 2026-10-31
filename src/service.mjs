@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { transaction } from './db.mjs';
 import { normalizePhone } from './security.mjs';
+import {internationalPhone} from './international.mjs';
 import { enqueueWorkflow } from './workflows.mjs';
 import { listQuotes } from './sales.mjs';
 
@@ -71,7 +72,7 @@ export function runAutomations(db, trigger, record, eventId) {
 }
 export function createContact(db, user, input, { source = 'manual' } = {}) {
   if (user.role === 'accountant') fail(403, 'لا تملك صلاحية إنشاء عميل');
-  const record = { id: uid(), name: text(input.name, 'الاسم'), phone: input.phone ? normalizePhone(input.phone) : null,
+  const record = { id: uid(), name: text(input.name, 'الاسم'), phone: input.phone ? (input.phone_country?internationalPhone(input.phone,input.phone_country):normalizePhone(input.phone)) : null,
     email: text(input.email || '', 'البريد', 254, false), owner_id: owner(db, user, input.owner_id),
     custom: validateCustom(db, 'contact', input.custom), created_at: now() };
   if (record.phone && db.prepare('SELECT id FROM contacts WHERE phone=?').get(record.phone)) fail(409, 'الرقم مسجل بالفعل؛ راجع جهة الاتصال الموجودة');

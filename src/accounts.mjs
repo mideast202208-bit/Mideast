@@ -1,5 +1,6 @@
 import {uid,now,fail,text,audit} from './service.mjs';
 import {encryptSecret,decryptSecret} from './integration-settings.mjs';
+import {mergeProfiles} from './profiles.mjs';
 
 export const accountLimits=Object.freeze({facebook:10,instagram:10,whatsapp:10});
 export function extraAccountConfig(db,channel,accountId,key){
@@ -19,7 +20,7 @@ export function accountSummary(db,base,origin){
  const legacy=db.prepare('SELECT channel,account_id,profile_url,active,verified_at,last_event_at FROM channel_accounts WHERE account_id<>\'\'').all().map(r=>({...r,id:'primary-'+r.channel,name:r.channel==='facebook'?'فيسبوك الرئيسي':'إنستجرام الرئيسي',primary:true,subscribed:Boolean(r.verified_at)}));
  if(base.phoneId)legacy.push({id:'primary-whatsapp',channel:'whatsapp',account_id:base.phoneId,name:'واتساب الرئيسي',primary:true,active:Boolean(base.accessToken),verified_at:null,last_event_at:db.prepare("SELECT MAX(m.created_at) stamp FROM messages m LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.direction='in' AND COALESCE(a.phone_id,?)=?").get(base.phoneId,base.phoneId)?.stamp||null,subscribed:Boolean(base.appSecret&&base.verifyToken)});
  const extras=db.prepare('SELECT id,channel,account_id,name,intake_user,active,verified_at,subscribed,last_event_at,created_at FROM communication_accounts ORDER BY created_at').all();
- return [...legacy,...extras].map(r=>({...r,webhook:origin+'/webhooks/'+r.channel,state:!r.active?'disabled':r.last_event_at?'receiving':r.verified_at&&r.subscribed?'verified':'needs_setup'}));
+ return mergeProfiles(db,[...legacy,...extras].map(r=>({...r,webhook:origin+'/webhooks/'+r.channel,state:!r.active?'disabled':r.last_event_at?'receiving':r.verified_at&&r.subscribed?'verified':'needs_setup'})));
 }
 export function saveExtraAccount(db,user,input,key,base,id){
  if(user.role!=='admin')fail(403,'ربط الحسابات للمالك فقط');
@@ -30,7 +31,7 @@ export function saveExtraAccount(db,user,input,key,base,id){
  if(!current){
   const primary=channel==='whatsapp'?base.phoneId:db.prepare('SELECT account_id FROM channel_accounts WHERE channel=?').get(channel)?.account_id;
   if(String(primary||'')===account_id||db.prepare('SELECT id FROM communication_accounts WHERE channel=? AND account_id=?').get(channel,account_id))fail(409,'الحساب مضاف بالفعل');
-  if(db.prepare('SELECT COUNT(*) n FROM communication_accounts WHERE channel=?').get(channel).n+(primary?1:0)>=accountLimits[channel])fail(409,'وصلت لحد '+accountLimits[channel]+' حسابات لهذه القناة');
+  if(accountSummary(db,base,'').filter(a=>a.channel===channel).length>=accountLimits[channel])fail(409,'وصلت لحد '+accountLimits[channel]+' حسابات لهذه القناة');
  }
  const cfg=current?JSON.parse(decryptSecret(current.configuration_cipher,key)):{};
  let credentialChange=!current;

@@ -7,6 +7,9 @@ import { validateAppData } from './studio.mjs';
 import { queueMessage } from './whatsapp.mjs';
 import { resolveRegistrationLink } from './intake-links.mjs';
 
+import {internationalPhone,nationality} from './international.mjs';
+import {documentTypes} from '../public/documents.js';
+
 export const intakeLimits=Object.freeze({maxFiles:12,maxFileMB:5,maxTotalMB:25,maxBodyMB:36});
 
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -16,7 +19,7 @@ export function cleanIntake(input){
   const name=text(input.name,'اسم الطالب',160);
   let phone=text(input.phone,'رقم الهاتف',40).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[\s()\-]/g,'');
   if(/^01[0125]\d{8}$/.test(phone))phone='+20'+phone.slice(1);
-  phone=normalizePhone(phone);
+  phone=input.phone_country?internationalPhone(input.phone,input.phone_country):normalizePhone(phone);
   const email=text(input.email||'','البريد',254,false).toLowerCase();
   if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'بريد غير صالح');
   const source=['website','facebook','instagram','whatsapp','api'].includes(input.source)?input.source:'website';
@@ -27,9 +30,9 @@ export function cleanIntake(input){
   const academic_year=text(input.academic_year||(nonAcademic?String(new Date().getFullYear()):''),'سنة التقديم',9);
   if(!/^\d{4}(?:\/\d{4})?$/.test(academic_year))fail(400,'أدخل سنة تقديم صحيحة');
   const level=input.level||'بكالوريوس';if(!['بكالوريوس','ماجستير','دكتوراه','غير دراسي'].includes(level))fail(400,'مرحلة دراسية غير صالحة');
-  const result={name,phone,email,source,certificate,academic_year,level,nationality:text(input.nationality||'','الجنسية',80,false),university:text(input.university||'أحتاج استشارة','الجامعة',160),faculty:text(input.faculty||'أحتاج استشارة','التخصص',160),notes:text(input.notes||'','الملاحظات',2000,false),campaign:text(input.campaign||'','الحملة',150,false),whatsapp_opt_in:input.whatsapp_opt_in===true};
+  const result={name,phone,email,source,certificate,academic_year,level,nationality:input.nationality_code?nationality(input.nationality_code):text(input.nationality||'','الجنسية',80,false),university:text(input.university||'أحتاج استشارة','الجامعة',160),faculty:text(input.faculty||'أحتاج استشارة','التخصص',160),notes:text(input.notes||'','الملاحظات',2000,false),campaign:text(input.campaign||'','الحملة',150,false),whatsapp_opt_in:input.whatsapp_opt_in===true};
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(input.request_key||''))fail(400,'مفتاح الطلب غير صالح؛ أعد فتح النموذج');
-  return {...result,...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{})};
+  return {...result,...(input.phone_country?{phone_country:input.phone_country}:{}),...(input.nationality_code?{nationality_code:input.nationality_code}:{}),...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{})};
 }
 function intakeFiles(files=[]){
   if(!Array.isArray(files)||files.length>intakeLimits.maxFiles)fail(400,'بحد أقصى 12 مستندًا');
@@ -42,7 +45,8 @@ function intakeFiles(files=[]){
     if(!(mime==='application/pdf'&&bytes.subarray(0,5).toString()==='%PDF-')&&
       !(mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)&&
       !(mime==='image/png'&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))))fail(400,'مسموح PDF وJPG وPNG حقيقي فقط');
-    return {name:text(f.name,'اسم الملف',160),mime,bytes};
+    if(f.document_type!==undefined&&!Object.values(documentTypes).includes(f.document_type))fail(400,'نوع المستند غير متاح');
+    return {name:text(f.name,'اسم الملف',160),mime,bytes,...(f.document_type?{document_type:f.document_type}:{})};
   });
 }
 export function registrationFile(record,input){
@@ -52,7 +56,7 @@ export function registrationFile(record,input){
 export function createRegistration(db,input,key,origin){
   const settings=intakeSettings(db);if(!settings.enabled)fail(503,'التسجيل متوقف مؤقتًا');
   const clean=cleanIntake(input),files=intakeFiles(input.files);
-  const fingerprint=hash(JSON.stringify({...clean,files:files.map(f=>({name:f.name,sha:hash(f.bytes)}))}));
+  const fingerprint=hash(JSON.stringify({...clean,files:files.map(f=>({name:f.name,sha:hash(f.bytes),...(f.document_type?{document_type:f.document_type}:{})}))}));
   const duplicate=db.prepare('SELECT * FROM intake_registrations WHERE request_key=?').get(clean.request_key);
   if(duplicate){if(duplicate.fingerprint!==fingerprint)fail(409,'مفتاح الطلب استُخدم لبيانات مختلفة');return receiptResult(duplicate,key,origin,true);}
   const owner=intakeOwner(db);if(!owner)fail(503,'لا يوجد موظف استقبال متاح');
@@ -76,7 +80,7 @@ export function createRegistration(db,input,key,origin){
     const assigned=db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(contact.owner_id);
     if(!assigned)fail(409,'ملف الرقم يحتاج مراجعة إسناد من الإدارة');
     const actor={...assigned,role:'admin'};
-    const student=validateAppData(db,actor,apps.me_students,{guardian:contact.id,certificate:clean.certificate,academic_year:clean.academic_year,nationality:clean.nationality,notes:[clean.requested_service?'الخدمة المطلوبة: '+clean.requested_service:'',clean.notes].filter(Boolean).join('\n')});
+    const student=validateAppData(db,actor,apps.me_students,{guardian:contact.id,certificate:clean.certificate,academic_year:clean.academic_year,nationality:clean.nationality,...(clean.nationality_code?{nationality_code:clean.nationality_code}:{}),...(clean.phone_country?{phone_country:clean.phone_country}:{}),notes:[clean.requested_service?'الخدمة المطلوبة: '+clean.requested_service:'',clean.notes].filter(Boolean).join('\n')});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(studentId,apps.me_students,clean.name,assigned.id,student,now(),now());
     const admission=validateAppData(db,actor,apps.me_admissions,{student:studentId,reference:record.reference,university:clean.university,faculty:clean.faculty,level:clean.level,application_status:'استكمال البيانات',...(clean.requested_service?{requested_service:clean.requested_service}:{})});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(admissionId,apps.me_admissions,record.reference+' · '+clean.name,assigned.id,admission,now(),now());
@@ -88,14 +92,14 @@ export function createRegistration(db,input,key,origin){
     }
     db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(uid(),contact.id,leadId,'مراجعة التسجيل '+record.reference,new Date(Date.now()+2*3600000).toISOString(),'open',assigned.id,now());
     db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(fileId,contact.id,null,'registration-'+record.reference+'.html','text/html',Buffer.from(registrationFile(record,clean)),now());
-    const indexDocument=(name,attachmentId)=>{
-      const values=validateAppData(db,actor,apps.me_documents,{student:studentId,application:admissionId,document_type:'مستند آخر',document_status:'صورة مستلمة',received_date:now().slice(0,10),file_reference:attachmentId});
+    const indexDocument=(name,attachmentId,type='مستند آخر')=>{
+      const values=validateAppData(db,actor,apps.me_documents,{student:studentId,application:admissionId,document_type:type,document_status:'صورة مستلمة',received_date:now().slice(0,10),file_reference:attachmentId});
       db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(uid(),apps.me_documents,name,assigned.id,values,now(),now());
     };
     indexDocument('ملف التسجيل '+record.reference,fileId);
     for(const file of files){
       const attachmentId=uid();db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(attachmentId,contact.id,null,file.name,file.mime,file.bytes,now());
-      indexDocument(file.name,attachmentId);
+      indexDocument(file.name,attachmentId,file.document_type);
     }
     if(clean.whatsapp_opt_in)db.prepare('INSERT INTO contact_preferences VALUES(?,1,?) ON CONFLICT(contact_id) DO UPDATE SET whatsapp_opt_in=1,updated_at=excluded.updated_at').run(contact.id,now());
     const delivery=clean.whatsapp_opt_in?'pending':'not_requested';
@@ -122,7 +126,7 @@ export function registrationFiles(db,user,id){
   if(user.role==='accountant')fail(403,'الملفات لفريق العملاء');
   const row=db.prepare('SELECT contact_id,admission_id FROM intake_registrations WHERE id=?').get(id);
   if(!row)fail(404,'التسجيل غير متاح');getContact(db,user,row.contact_id);
-  return db.prepare(`SELECT a.id,a.name,a.mime,length(a.content) AS size FROM app_records d
+  return db.prepare(`SELECT a.id,a.name,a.mime,length(a.content) AS size,d.id document_id,json_extract(d.data,'$.document_type') document_type FROM app_records d
     JOIN studio_apps s ON s.id=d.app_id JOIN attachments a ON a.id=json_extract(d.data,'$.file_reference')
     WHERE s.app_key='me_documents' AND json_extract(d.data,'$.application')=? AND a.contact_id=? ORDER BY a.created_at,a.name`).all(row.admission_id,row.contact_id);
 }

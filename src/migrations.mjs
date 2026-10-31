@@ -1,3 +1,29 @@
+export function migrateV7(db){
+ if(db.prepare('SELECT 1 FROM schema_versions WHERE version=7').get())return;
+ db.exec('BEGIN IMMEDIATE');
+ try{db.exec(`
+ CREATE TABLE marketing_assets(id TEXT PRIMARY KEY,name TEXT NOT NULL,mime TEXT NOT NULL,content BLOB NOT NULL,created_by TEXT NOT NULL REFERENCES users(id),created_at TEXT NOT NULL);
+ CREATE TABLE marketing_posts(id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,campaign TEXT NOT NULL DEFAULT '',asset_id TEXT REFERENCES marketing_assets(id),media_url TEXT NOT NULL DEFAULT '',link_url TEXT NOT NULL DEFAULT '',include_registration INTEGER NOT NULL DEFAULT 0,created_by TEXT NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+ CREATE TABLE marketing_targets(id TEXT PRIMARY KEY,post_id TEXT NOT NULL REFERENCES marketing_posts(id),account_key TEXT NOT NULL,channel TEXT NOT NULL,account_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN('draft','scheduled','publishing','processing','published','blocked','failed','unknown','cancelled')),scheduled_at TEXT,provider_id TEXT,container_id TEXT,error_code TEXT,attempted_at TEXT,updated_at TEXT NOT NULL,UNIQUE(post_id,account_key));
+ CREATE INDEX marketing_due ON marketing_targets(status,scheduled_at);
+ CREATE TABLE marketing_account_state(account_key TEXT PRIMARY KEY,identity_hash TEXT NOT NULL,can_read INTEGER NOT NULL DEFAULT 0,can_publish INTEGER NOT NULL DEFAULT 0,permissions TEXT NOT NULL DEFAULT '[]',checked_at TEXT NOT NULL,error_code TEXT);
+ CREATE TABLE marketing_feed(account_key TEXT NOT NULL,provider_id TEXT NOT NULL,body TEXT NOT NULL,media_url TEXT NOT NULL DEFAULT '',permalink TEXT NOT NULL DEFAULT '',media_type TEXT NOT NULL DEFAULT '',published_at TEXT NOT NULL,synced_at TEXT NOT NULL,PRIMARY KEY(account_key,provider_id));
+ CREATE TABLE marketing_saved_videos(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,title TEXT NOT NULL,url TEXT NOT NULL,embed_url TEXT NOT NULL,created_by TEXT NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,UNIQUE(account_key,url));
+ INSERT INTO schema_versions VALUES(7);
+ `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+}
+export function migrateV6(db){
+ if(db.prepare('SELECT 1 FROM schema_versions WHERE version=6').get())return;
+ db.exec('BEGIN IMMEDIATE');
+ try{db.exec(`
+  CREATE TABLE social_profiles(id TEXT PRIMARY KEY,channel TEXT NOT NULL CHECK(channel IN('facebook','instagram','tiktok','youtube')),name TEXT NOT NULL,url TEXT NOT NULL,account_key TEXT UNIQUE,created_by TEXT NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,UNIQUE(channel,url));
+  CREATE TABLE thread_student_context(thread_key TEXT PRIMARY KEY,student_id TEXT NOT NULL REFERENCES app_records(id),linked_by TEXT NOT NULL REFERENCES users(id),updated_at TEXT NOT NULL);
+  CREATE TABLE message_student_links(kind TEXT NOT NULL CHECK(kind IN('social','whatsapp')),message_id TEXT NOT NULL,student_id TEXT NOT NULL REFERENCES app_records(id),reference TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(kind,message_id));
+  INSERT OR IGNORE INTO app_fields SELECT lower(hex(randomblob(16))),id,'nationality_code','كود الجنسية','text',0,'[]',NULL,20 FROM studio_apps WHERE app_key='me_students';
+  INSERT OR IGNORE INTO app_fields SELECT lower(hex(randomblob(16))),id,'phone_country','دولة رقم الهاتف','text',0,'[]',NULL,21 FROM studio_apps WHERE app_key='me_students';
+  INSERT INTO schema_versions VALUES(6);
+ `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+}
 export function migrateV5(db){
  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=5').get())return;
  db.exec('BEGIN IMMEDIATE');

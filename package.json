@@ -1,9 +1,11 @@
 {
   "name": "mid-east-platform",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=24.0.0"},
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "dev": "node src/server.mjs",
     "start": "node src/server.mjs",
@@ -11,5 +13,9 @@
     "test": "node --test tests/*.test.mjs",
     "backup": "node scripts/backup.mjs",
     "doctor": "node scripts/doctor.mjs"
+  },
+  "dependencies": {
+    "i18n-iso-countries": "7.14.0",
+    "libphonenumber-js": "1.13.15"
   }
 }

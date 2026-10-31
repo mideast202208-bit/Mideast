@@ -1,7 +1,7 @@
 import { uid, now, fail, audit } from './service.mjs';
 import { encryptSecret, decryptSecret } from './integration-settings.mjs';
 import { hash, token } from './security.mjs';
-import {extraAccountConfig,accountLimits} from './accounts.mjs';
+import {extraAccountConfig,accountLimits,accountSummary} from './accounts.mjs';
 
 export const channelNames={website:'الموقع',facebook:'فيسبوك',instagram:'إنستجرام',whatsapp:'واتساب',api:'API',manual:'يدوي'};
 export function ensureOmniDefaults(db){
@@ -62,7 +62,7 @@ export function saveChannel(db,user,channel,input,key){
     if(name==='account_id'&&!/^\d{1,40}$/.test(v))fail(400,'معرف الحساب يجب أن يكون أرقامًا');
     if(name==='account_id'&&v!==row.account_id){
       if(db.prepare('SELECT 1 FROM communication_accounts WHERE channel=? AND account_id=?').get(channel,v))fail(409,'الحساب مضاف ضمن الحسابات الإضافية');
-      if(!row.account_id&&db.prepare('SELECT COUNT(*) n FROM communication_accounts WHERE channel=?').get(channel).n>=accountLimits[channel])fail(409,'وصلت للحد المسموح لهذه القناة');
+      if(!row.account_id&&accountSummary(db,{},'').filter(a=>a.channel===channel).length>=accountLimits[channel])fail(409,'وصلت للحد المسموح لهذه القناة');
     }
     if(name==='version'&&!/^v\d+\.\d+$/.test(v))fail(400,'أدخل إصدار Graph المفعّل لتطبيقك');
     if(name==='intake_user'&&!db.prepare("SELECT id FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(v))fail(400,'موظف غير صالح');

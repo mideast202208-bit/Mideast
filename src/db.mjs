@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { migrate, migrateV3, migrateV4,migrateV5 } from './migrations.mjs';
+import { migrate, migrateV3, migrateV4,migrateV5,migrateV6,migrateV7 } from './migrations.mjs';
+import {normalizeSearch} from './international.mjs';
 
 export function openDatabase(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -94,6 +95,9 @@ export function openDatabase(path) {
   migrateV3(db);
   migrateV4(db);
   migrateV5(db);
+  migrateV6(db);
+  migrateV7(db);
+  db.function('me_search_normalize',{deterministic:true},normalizeSearch);
   return db;
 }
 

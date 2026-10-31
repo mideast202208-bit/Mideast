@@ -19,6 +19,8 @@ export function installEducationWorkspace(db,user){
     const students=createApp('me_students','الطلاب','ملف مستقل لكل طالب، ويمكن ربط عدة طلاب بجهة اتصال ولي أمر واحدة.');
     addField(students,'guardian','جهة اتصال الطالب أو ولي الأمر','relation',1,[],'contact');
     addField(students,'nationality','الجنسية','text');
+    addField(students,'nationality_code','كود الجنسية','text');
+    addField(students,'phone_country','دولة رقم الهاتف','text');
     addField(students,'certificate','نوع الشهادة','select',1,['ثانوي سوداني','IGCSE','دبلومة أمريكية','شهادة عربية','أخرى']);
     addField(students,'academic_year','سنة التقديم','text',1);
     addField(students,'grade','النسبة أو التقدير','text');

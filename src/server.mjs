@@ -20,6 +20,8 @@ import { ensureOmniDefaults } from './omni-config.mjs';
 import { handleOmni,handleOmniPublic } from './omni-routes.mjs';
 import { processSocialEvents,sendSocialNext } from './social.mjs';
 import { processIntakeDelivery } from './intake.mjs';
+import {internationalPhone} from './international.mjs';
+import {handleMarketing,processMarketingJobs,recoverMarketingJobs} from './marketing.mjs';
 import {handleCommunication} from './communication.mjs';
 import {handleAssistant} from './assistant.mjs';
 import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
@@ -34,6 +36,7 @@ export function createApp(options = {}) {
   if (production && !origin.startsWith('https://')) throw new Error('Production requires HTTPS PUBLIC_ORIGIN');
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
+  recoverMarketingJobs(db);
   let config = effectiveConfig(db,env,secretKey);
   if(config.phoneId)db.prepare("INSERT OR IGNORE INTO wa_thread_accounts SELECT v.id,?,MAX(m.created_at) FROM conversations v JOIN messages m ON m.conversation_id=v.id LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.direction='in' AND a.message_id IS NULL GROUP BY v.id").run(String(config.phoneId));
   const limits = new Map();
@@ -75,12 +78,14 @@ export function createApp(options = {}) {
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','same-origin');
     res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-src https://www.youtube.com https://www.tiktok.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       config=effectiveConfig(db,env,secretKey);
       const url=new URL(req.url,'http://localhost');
       const path=url.pathname;
       const method=req.method;
+      const marketingImage=path.match(/^\/social-media\/([a-f0-9-]{36})$/);
+      if(marketingImage&&method==='GET'){const image=db.prepare('SELECT mime,content FROM marketing_assets WHERE id=?').get(marketingImage[1]);if(!image)fail(404,'الصورة غير متاحة');res.writeHead(200,{'Content-Type':image.mime,'Cache-Control':'public,max-age=86400','Cross-Origin-Resource-Policy':'cross-origin'});res.end(image.content);return;}
       if(path==='/health' && method==='GET'){sendJson(res,200,{status:'ok'});return;}
       if(path==='/webhooks/whatsapp'){
         if(method==='GET'){
@@ -97,7 +102,8 @@ export function createApp(options = {}) {
       if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
-        const assets={'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
+        if(path==='/phone-lib.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(readFileSync(new URL('../node_modules/libphonenumber-js/bundle/libphonenumber-min.js',import.meta.url)));return;}
+        const assets={'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
@@ -140,6 +146,7 @@ export function createApp(options = {}) {
         sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
+      if(await handleMarketing({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleAssistant({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
       if(await handleOmni({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
@@ -164,7 +171,7 @@ export function createApp(options = {}) {
         const current=getContact(db,user,contactMatch[1]);const input=await jsonBody(req);
         const newOwner=owner(db,user,input.owner_id || current.owner_id);
         const name=text(input.name ?? current.name,'الاسم');
-        const phone=input.phone===undefined?current.phone:input.phone?normalizePhone(input.phone):null;
+        const phone=input.phone===undefined?current.phone:input.phone?(input.phone_country?internationalPhone(input.phone,input.phone_country):normalizePhone(input.phone)):null;
         const email=text(input.email ?? current.email,'البريد',254,false);
         const custom=validateCustom(db,'contact',input.custom ?? JSON.parse(current.custom));
         if(phone && db.prepare('SELECT id FROM contacts WHERE phone=? AND id<>?').get(phone,current.id))fail(409,'الرقم موجود بالفعل');
@@ -344,7 +351,8 @@ export function createApp(options = {}) {
     if(sending)return;sending=true;
     try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch,secretKey);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch,secretKey);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
-  return {server,db,tick,get config(){return config;}};
+  let marketingBusy=false;const marketingTick=async()=>{if(marketingBusy)return;marketingBusy=true;try{await processMarketingJobs(db,secretKey,effectiveConfig(db,env,secretKey),origin,options.transport||fetch);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
+  return {server,db,tick,marketingTick,get config(){return config;}};
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   process.umask(0o077);
@@ -358,6 +366,7 @@ if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))
   app.db.prepare("UPDATE media_jobs SET status='pending' WHERE status='working'").run();
   app.server.listen(port,host,()=>console.log(`Mid East listening on ${host}:${port}`));
   const timer=setInterval(app.tick,3000);timer.unref();
-  const stop=()=>{clearInterval(timer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
+  const marketingTimer=setInterval(app.marketingTick,10000);marketingTimer.unref();
+  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
   process.on('SIGTERM',stop);process.on('SIGINT',stop);
 }

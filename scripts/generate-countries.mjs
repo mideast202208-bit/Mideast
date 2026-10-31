@@ -1,0 +1,10 @@
+import iso from 'i18n-iso-countries';
+import {createRequire} from 'node:module';
+import {getCountries,getCountryCallingCode} from 'libphonenumber-js';
+import {writeFileSync} from 'node:fs';
+const require=createRequire(import.meta.url);iso.registerLocale(require('i18n-iso-countries/langs/ar.json'));
+const supported=new Set(getCountries());
+const rows=Object.entries(iso.getNames('ar',{select:'official'})).map(([code,name])=>({code,name,dial:supported.has(code)?'+'+getCountryCallingCode(code):''}));
+if(!rows.some(r=>r.code==='XK'))rows.push({code:'XK',name:'كوسوفو',dial:'+383'});
+rows.sort((a,b)=>a.name.localeCompare(b.name,'ar'));rows.push({code:'ZZ',name:'أخرى / عديم الجنسية',dial:''});
+writeFileSync(new URL('../public/countries.js',import.meta.url),'// ISO 3166 countries and territories; nationality is independent of telephone country.\nexport const countries='+JSON.stringify(rows)+';\n');
