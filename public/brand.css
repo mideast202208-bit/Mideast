@@ -15,3 +15,8 @@ label,.comm-filters label,.student-lookup label{color:#365666;font-size:13px;lin
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}@media(forced-colors:active){.brand-icon{stroke:currentColor}.nav.active{outline:2px solid Highlight}.btn,.panel,.channel-symbol{border:1px solid CanvasText}}
 
 .apply-body{font-family:var(--me-font);color:var(--me-navy);background:#f5f7f3}.apply-body input:not([type=checkbox]),.apply-body select,.apply-body textarea,.portal-primary,.portal-secondary{font-family:var(--me-font)}.portal-primary{background:var(--me-green);min-height:44px}.portal-secondary{color:var(--me-navy);min-height:44px}.portal-progress i{background:var(--me-green)}.apply-logo{background:var(--me-navy)}.portal-kicker,.apply-intro em{color:var(--me-green)}
+
+/* Higher specificity than legacy omni.css hero buttons; preserve the existing layout. */
+:is(.omni-hero,.workspace-hero) .btn.primary{background:var(--me-accent);border-color:var(--me-accent);color:var(--me-navy)}
+:is(.omni-hero,.workspace-hero) .btn.primary:hover{background:var(--me-green);border-color:var(--me-green);color:#fff}
+:is(.omni-hero,.workspace-hero) .btn.primary:focus-visible{outline-color:#fff}
