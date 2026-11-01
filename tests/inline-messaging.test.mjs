@@ -33,6 +33,9 @@ test('record reply metadata is account-scoped; expired text is blocked and recip
   f.db.prepare('UPDATE wa_thread_accounts SET last_inbound=? WHERE conversation_id=? AND phone_id=?').run(new Date(Date.now()-25*3600000).toISOString(),f.conversation,'300');
   w=await f.request('/contacts/'+f.contact+'/workspace');assert.equal(w.data.channels.find(c=>c.channel==='whatsapp').reply_window_open,false);assert.equal(w.data.channels.find(c=>c.channel==='facebook').reply_window_open,true);
   assert.equal((await f.request(path,'POST',{body:'Expired'})).status,409);
+  f.db.prepare('UPDATE wa_thread_accounts SET last_inbound=NULL WHERE conversation_id=?').run(f.conversation);
+  w=await f.request('/contacts/'+f.contact+'/workspace');assert.equal(w.data.channels.find(c=>c.channel==='whatsapp').reply_window_open,false);
+  const inbox=await f.request('/communication');assert.equal(inbox.data.threads.find(t=>t.channel==='whatsapp').reply_window_open,false);
   assert.equal((await f.request('/communication/threads/'+encodeURIComponent('social:'+f.social)+'/messages','POST',{body:'Synthetic Facebook reply'})).status,201);
   assert.equal(f.db.prepare('SELECT COUNT(*) n FROM messages').get().n,1);assert.equal(f.db.prepare('SELECT COUNT(*) n FROM social_messages').get().n,1);
  }finally{await f.close();}
@@ -59,7 +62,7 @@ test('shared conversation renderer escapes messages and keeps unknown delivery d
 });
 
 test('inline drafts are isolated by account and cleared on logout; closed windows disable free text',async()=>{
- const dom=new JSDOM('<section class="customer-workspace"><div id="chat"></div></section>'),root=dom.window.document.querySelector('#chat'),contact={id:'synthetic-contact',name:'Synthetic student'},channels=[{channel:'whatsapp',account_id:'300',available:true,label:'Synthetic WhatsApp',reply_window_open:true},{channel:'facebook',account_id:'400',available:true,label:'Synthetic Facebook',reply_window_open:false}],workspace={contact,channels};
+ const dom=new JSDOM('<section class="customer-workspace"><div id="chat"></div></section>'),root=dom.window.document.querySelector('#chat'),contact={id:'synthetic-contact',name:'Synthetic student'},channels=[{channel:'whatsapp',account_id:'300',available:true,label:'Synthetic WhatsApp',reply_window_open:true},{channel:'facebook',account_id:'400',available:true,label:'Synthetic Facebook',reply_window_open:null}],workspace={contact,channels};
  const api=async(path,method,input)=>path.endsWith('/open-channel')?{key:input.channel==='whatsapp'?'whatsapp:synthetic:300':'social:synthetic'}:path.endsWith('/messages')?[]:path.endsWith('/students')?{students:[],selected:null,requires_choice:false}:workspace;
  const messenger=createRecordMessenger({api,getUser:()=>({role:'agent'}),toast:()=>{}});messenger.mount(root,workspace);await messenger.open(channels[0]);root.querySelector('[data-message-body]').value='Draft for WhatsApp';root.querySelector('[data-message-body]').dispatchEvent(new dom.window.Event('input',{bubbles:true}));
  await messenger.open(channels[1]);assert.equal(root.querySelector('[data-message-body]').value,'');assert.equal(root.querySelector('[data-message-control="send"]').disabled,true);
