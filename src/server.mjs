@@ -1,3 +1,4 @@
+import {handleCustomerExport} from './customer-export.mjs';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -173,6 +174,7 @@ export function createApp(options = {}) {
       // These render binary/HTML directly and bypass JSON projection. Staff may
       // send an authorized stored file through the server, but cannot read it.
       if(!canViewContactDetails(user)&&method==='GET'&&(/^\/api\/files\//.test(path)||/^\/api\/print\//.test(path)))fail(403,'الأصل قد يحتوي بيانات اتصال؛ اطلب نسخة منقحة من الإدارة');
+      if(await handleCustomerExport({db,user,path,method,req,res,jsonBody}))return;
       if(await handleCustomerWorkspace({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,smtpTransportFactory}))return;
       if(await handleMarketing({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
       if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
