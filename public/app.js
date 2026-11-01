@@ -1,4 +1,4 @@
-import {createStudentRecords} from './student-records.js';
+import {createStudentRecords,filterRecordsBySearch,sectionSearch,updateSectionSearch} from './student-records.js';
 import {createRecordViews} from './record-views.js';
 import {createMarketing} from './marketing.js';
 import {createWorkspace} from './workspace.js';
@@ -29,7 +29,14 @@ const isManager = () => ['admin','manager'].includes(user?.role);
 const canFinance = () => ['admin','manager','accountant'].includes(user?.role);
 const getContact = id => data.contacts.find(c=>c.id===id);
 const personName = id => data.users.find(u=>u.id===id)?.name || 'موظف مختص';
-const filtered = list => list.filter(r=>!search || Object.values(r).some(v=>typeof v==='string'&&v.toLowerCase().includes(search.toLowerCase())));
+const filtered = list => filterRecordsBySearch(list,search);
+function applyPageSearch(value,source){search=value;updateSectionSearch(document,search,view,source);}
+function studentSearchTerms(student){
+  const admissionApp=data.apps.find(a=>a.app_key==='me_admissions')?.id;
+  const requests=data.appRecords.filter(r=>r.app_id===admissionApp&&JSON.parse(r.data).student===student.id);
+  const guardian=getContact(JSON.parse(student.data).guardian);
+  return [guardian?.name||'','ST-'+student.id.replaceAll('-','').slice(0,12).toUpperCase(),...requests.map(r=>JSON.parse(r.data).reference||'')];
+}
 function toast(message,error=false){const el=typeof document==='undefined'?null:$('#toast');if(!el)return;el.textContent=message;el.className='show'+(error?' error':'');setTimeout(()=>el.className='',5000);}
 async function api(path,method='GET',body){
   const result=await fetch('/api'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
@@ -97,7 +104,7 @@ function render(){
   if(!allowed.some(([key])=>key===page))page=allowed[0][0];
   $('#app').innerHTML=`<div class="shell${navigationOpen?' navigation-open':''}"><button class="navigation-overlay" type="button" data-navigation-overlay aria-label="إغلاق القائمة الرئيسية" tabindex="-1" ${navigationOpen?'':'hidden'}></button><aside class="sidebar" id="primary-navigation-sidebar" aria-label="القائمة الرئيسية"><div class="sidebar-heading"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><button class="navigation-close" type="button" data-navigation-close aria-label="إغلاق القائمة الرئيسية">×</button></div><div class="sidebar-search"><label for="search">بحث في الصفحة الحالية</label><div>${brandIcon('search',17)}<input class="search" id="search" placeholder="بحث في الصفحة…" value="${escape(search)}" aria-label="بحث في الصفحة"></div></div><nav class="primary-navigation" aria-label="صفحات المنصة">${renderNavigation(allowed)}</nav><div class="sidebar-bottom"><div class="userline"><span class="avatar">${escape(user.name.slice(0,1))}</span><div>${escape(user.name)}<small>${roles[user.role]}</small></div></div><button class="nav" data-action="logout">خروج من الحساب</button><div class="statusnote">مساحة عمل مستقلة<br>مساحة العمل · 0.10</div></div></aside><main class="main" id="workspace-main"><header class="topbar"><button type="button" class="navigation-toggle" data-navigation-toggle aria-controls="primary-navigation-sidebar" aria-expanded="${navigationOpen}">${brandIcon('list',21)}<span>القائمة الرئيسية</span></button><div class="breadcrumb"><span>${escape(data.settings.company_name || 'ميد إيست')}</span><b>${escape(allNav.find(n=>n[0]===page)?.[2])}</b></div></header><section id="content">${view()}</section></main></div>`;
   syncNavigation();
-  $('#search').addEventListener('input',event=>{search=event.target.value;$('#content').innerHTML=view();});
+  $('#search').addEventListener('input',event=>{if(!event.isComposing)applyPageSearch(event.target.value,event.target);});
 }
 function view(){
   if(page==='marketing')return marketing.view();
@@ -108,8 +115,8 @@ function view(){
     const openTasks=data.tasks.filter(t=>t.status==='open'),active=data.leads.filter(l=>!['won','lost'].includes(l.stage)),openTickets=data.tickets.filter(t=>t.status!=='resolved');
     return heading(`صباح العمل، ${escape(user.name.split(' ')[0])} ☀`,'صورة واضحة للعملاء والمتابعة، من مكان واحد.')+`<div class="metrics">${[['♧',data.contacts.length,'إجمالي العملاء','جهات اتصال مسجلة'],['▦',active.length,'فرص قيد المتابعة','عبر مراحل البيع'],['◉',data.conversations.length,'محادثات واتساب','المحادثات المسجلة'],['☑',openTasks.length,'مهام مفتوحة','متابعة تحتاج تنفيذ']].map(([icon,count,label,note])=>`<article class="metric"><div class="metric-icon">${icon}</div><span>${escape(label)}</span><strong>${count.toLocaleString('ar-EG')}</strong><small>${note}</small></article>`).join('')}</div><div class="grid2"><div class="panel"><div class="panelhead"><h2>مسار فرص البيع</h2><button class="linkbutton" data-page="leads">عرض المسار ←</button></div>${Object.entries(stages).map(([key,label])=>{const count=data.leads.filter(l=>l.stage===key).length;return `<div class="progressrow"><span>${escape(label)}</span><div class="bar"><div style="width:${data.leads.length?count/data.leads.length*100:0}%"></div></div><b>${count.toLocaleString('ar-EG')}</b></div>`;}).join('')}</div><div class="panel"><div class="panelhead"><h2>المتابعة القادمة</h2><button class="linkbutton" data-page="tasks">كل المهام ←</button></div>${openTasks.length?openTasks.slice(0,4).map(taskRow).join(''):empty('كل شيء جاهز للبدء','أضف عميلًا، ثم حدد أول متابعة','☑')}<div class="setup-card"><b>${openTickets.length.toLocaleString('ar-EG')} تذاكر تحتاج متابعة</b><p>تابع طلبات العملاء، وأغلق التذكرة بعد حل المشكلة.</p></div></div></div>${!data.contacts.length?`<div class="panel"><h2>ابدأ مساحة عملك</h2><p class="sub">البيانات تبدأ فارغة. أضف فريقك وحقول عملك، ثم سجّل أول عميل.</p><div class="actions" style="margin-top:18px"><button class="btn primary" data-action="contact">＋ أول عميل</button>${isManager()?'<button class="btn" data-page="studio">افتح الاستوديو</button><button class="btn" data-page="integrations">إعداد واتساب</button>':''}</div></div>`:''}`;
   }
-  if(page==='contacts')return heading('العملاء','اختر عرض المربعات أو القائمة أو الجدول، وافتح ملف العميل والرسائل من نفس المكان.','إضافة عميل','contact')+recordViews.view('contacts',filtered(data.contacts));
-  if(page==='leads')return heading('فرص البيع','مربعات، لوحة مراحل، قائمة أو جدول — اختر الطريقة الأنسب لمتابعتك.','فرصة جديدة','lead')+recordViews.view('leads',filtered(data.leads));
+  if(page==='contacts')return heading('العملاء','اختر عرض المربعات أو القائمة أو الجدول، وافتح ملف العميل والرسائل من نفس المكان.','إضافة عميل','contact')+sectionSearch('العملاء',isManager()?'اسم العميل أو رقم الهاتف أو البريد':'اسم العميل أو بياناته المتاحة',search,recordViews.view('contacts',filtered(data.contacts)));
+  if(page==='leads')return heading('فرص البيع','مربعات، لوحة مراحل، قائمة أو جدول — اختر الطريقة الأنسب لمتابعتك.','فرصة جديدة','lead')+sectionSearch('الفرص','عنوان الفرصة أو اسم العميل',search,recordViews.view('leads',filterRecordsBySearch(data.leads,search,r=>[getContact(r.contact_id)?.name||''])));
   if(page==='tasks')return heading('المهام والمتابعة','خطوة واضحة لكل موعد، حتى لا تفوت متابعة أي عميل.','مهمة جديدة','task')+`<div class="panel">${data.tasks.length?filtered(data.tasks).map(taskRow).join(''):empty('لا توجد مهام','أضف مهمة أو أنشئ قاعدة متابعة من الأتمتة','☑')}</div>`;
   if(page==='tickets')return heading('خدمة العملاء','طلبات العملاء ومشكلاتهم، من فتح التذكرة حتى الحل.','فتح تذكرة','ticket')+`<div class="panel">${data.tickets.length?`<div class="tablewrap"><table><thead><tr><th>التذكرة</th><th>العميل</th><th>الأولوية</th><th>المسؤول</th><th>الحالة</th></tr></thead><tbody>${filtered(data.tickets).map(t=>`<tr><td><b>${escape(t.title)}</b><div class="sub">${escape(t.description)}</div></td><td>${escape(getContact(t.contact_id)?.name)}</td><td>${badge({low:'منخفضة',normal:'عادية',high:'عاجلة'}[t.priority],t.priority==='high'?'red':'')}</td><td>${escape(personName(t.owner_id))}</td><td><select data-ticket="${t.id}">${selectOptions({open:'مفتوحة',pending:'قيد المتابعة',resolved:'تم الحل'},t.status)}</select></td></tr>`).join('')}</tbody></table></div>`:empty('لا توجد تذاكر مفتوحة','سجّل طلب العميل وحدد أولويته والمسؤول عنه','▤')}</div>`;
   if(page==='inbox'){
@@ -172,6 +179,7 @@ function arrangeRecord(form){
  if(fields)details.append(fields);if(files)details.append(files);if(chat)side.append(chat);if(followup)side.append(followup);layout.append(details,side);form.prepend(layout);
 }
 async function action(name,id){
+  if(name==='clear-page-search'){applyPageSearch('',null);$('[data-page-search]')?.focus();return;}
   if(await studentRecords.action(name,id))return;
   if(await marketing.action(name,id))return;
   if(await workspace.action(name,id))return;
@@ -245,6 +253,8 @@ document.addEventListener('keydown',event=>{
  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
 });
 if(typeof window!=='undefined')window.addEventListener('resize',()=>{if(!mobileNavigation())navigationOpen=false;syncNavigation();});
+document.addEventListener('input',event=>{if(event.target.matches?.('[data-page-search]')&&!event.isComposing)applyPageSearch(event.target.value,event.target);});
+document.addEventListener('compositionend',event=>{if(event.target.matches?.('[data-page-search],#search'))applyPageSearch(event.target.value,event.target);});
 document.addEventListener('change',async event=>{
   try{if(event.target.dataset.studentFilter){studentRecords.change(event.target.dataset.studentFilter,event.target.value);return;}if(event.target.dataset.recordOrder){recordViews.order(event.target.dataset.recordOrder,event.target.value);render();return;}if(event.target.dataset.stage){await api('/leads/'+event.target.dataset.stage,'PATCH',{stage:event.target.value});await load();toast('تم تحديث المرحلة');}
     if(event.target.dataset.ticket){await api('/tickets/'+event.target.dataset.ticket,'PATCH',{status:event.target.value});await load();toast('تم تحديث التذكرة');}}
@@ -271,12 +281,13 @@ function advancedView(){
   }
   if(page.startsWith('app:')){
     const appId=page.slice(4),app=data.apps.find(a=>a.id===appId);if(!app)return empty('التطبيق غير متاح');
-    if(app.app_key==='me_documents')return heading('مستندات الطلاب','فولدر مستقل لكل طالب، باسم الطالب ورقم ملفه.','إضافة سجل مستند','new-record')+studentRecords.documents(search);
-    const all=data.appRecords.filter(r=>r.app_id===appId),admissions=app.app_key==='me_admissions';
+    if(app.app_key==='me_documents')return heading('مستندات الطلاب','فولدر مستقل لكل طالب، باسم الطالب ورقم ملفه.','إضافة سجل مستند','new-record')+sectionSearch('المستندات','اسم الطالب أو رقم الملف أو اسم المستند',search,studentRecords.documents(search));
+    const all=data.appRecords.filter(r=>r.app_id===appId),admissions=app.app_key==='me_admissions',students=app.app_key==='me_students';
     const fields=fieldsFor(appId).slice(0,5),serviceField=fieldsFor(appId).find(f=>f.field_key==='requested_service');
     if(admissions&&serviceField&&!fields.includes(serviceField))fields.push(serviceField);
-    const records=admissions?studentRecords.requests('admissions',all,search):filtered(all);
-    return heading(escape(app.name),escape(app.description || 'سجلات تطبيقك المخصص، محفوظة بصلاحيات الموظفين.'),'سجل جديد','new-record')+(admissions?studentRecords.requestFilters('admissions',all):'')+`<div class="panel">${admissions?`<p class="sub" role="status">${records.length} من ${all.length} طلب</p>`:''}${records.length?`<div class="tablewrap"><table><thead><tr><th>عنوان السجل</th>${fields.map(f=>`<th>${escape(f.label)}</th>`).join('')}<th>المسؤول</th><th></th></tr></thead><tbody>${records.map(r=>{const values=JSON.parse(r.data);return `<tr><td><b>${escape(r.name)}</b></td>${fields.map(f=>`<td>${escape(f.type==='relation'?(relationOptions(f.relation_target).find(v=>v.id===values[f.field_key])?.name||'غير متاح'):f.type==='boolean'?(values[f.field_key]?'نعم':'لا'):(values[f.field_key]??'—'))}</td>`).join('')}<td>${escape(personName(r.owner_id))}</td><td>${app.app_key==='me_students'?`<button type="button" class="btn small" data-action="student-folder" data-id="${escape(r.id)}">المستندات</button>`:''}<button class="linkbutton" data-action="edit-record" data-id="${r.id}">فتح السجل ←</button></td></tr>`;}).join('')}</tbody></table></div>`:empty(all.length?'لا توجد نتائج مطابقة':'التطبيق جاهز لأول سجل',all.length?'غيّر البحث أو امسح الفلاتر':'أضف حقوله من الاستوديو، ثم ابدأ التسجيل')}${isManager()?`<button class="btn small" data-action="design-app" data-id="${appId}">تصميم نموذج التطبيق</button>`:''}</div>`;
+    const records=admissions?studentRecords.requests('admissions',all,search):students?filterRecordsBySearch(all,search,studentSearchTerms):filtered(all);
+    const body=`<div class="panel">${admissions||students?`<p class="sub" role="status">${records.length} من ${all.length} ${students?'طالب':'طلب'}</p>`:''}${records.length?`<div class="tablewrap"><table><thead><tr><th>عنوان السجل</th>${fields.map(f=>`<th>${escape(f.label)}</th>`).join('')}<th>المسؤول</th><th></th></tr></thead><tbody>${records.map(r=>{const values=JSON.parse(r.data);return `<tr><td><b>${escape(r.name)}</b></td>${fields.map(f=>`<td>${escape(f.type==='relation'?(relationOptions(f.relation_target).find(v=>v.id===values[f.field_key])?.name||'غير متاح'):f.type==='boolean'?(values[f.field_key]?'نعم':'لا'):(values[f.field_key]??'—'))}</td>`).join('')}<td>${escape(personName(r.owner_id))}</td><td>${app.app_key==='me_students'?`<button type="button" class="btn small" data-action="student-folder" data-id="${escape(r.id)}">المستندات</button>`:''}<button class="linkbutton" data-action="edit-record" data-id="${r.id}">فتح السجل ←</button></td></tr>`;}).join('')}</tbody></table></div>`:empty(all.length?'لا توجد نتائج مطابقة':'التطبيق جاهز لأول سجل',all.length?'غيّر البحث أو امسح الفلاتر':'أضف حقوله من الاستوديو، ثم ابدأ التسجيل')}${isManager()?`<button class="btn small" data-action="design-app" data-id="${appId}">تصميم نموذج التطبيق</button>`:''}</div>`;
+    return heading(escape(app.name),escape(app.description || 'سجلات تطبيقك المخصص، محفوظة بصلاحيات الموظفين.'),'سجل جديد','new-record')+(students?sectionSearch('الطلاب','اسم الطالب أو رقم الملف',search,body):(admissions?studentRecords.requestFilters('admissions',all):'')+body);
   }
   if(page==='integrations'){
     const wa=integration?.whatsapp;
