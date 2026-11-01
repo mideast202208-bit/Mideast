@@ -1,0 +1,31 @@
+name: Verify CRM before production
+on:
+  pull_request:
+  push:
+    branches: [main, security/render-recovery-20261031]
+permissions:
+  contents: read
+concurrency:
+  group: crm-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-and-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Build the portable Docker image without production data
+        run: docker build --file deploy/Dockerfile --tag middle-east-crm:ci .
+      - name: List sensitive changes requiring owner review
+        run: node scripts/review-sensitive-changes.mjs
+# No production deploy command or production credentials in this workflow.

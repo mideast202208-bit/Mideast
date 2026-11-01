@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, existsSync, mkdirSync, chmodSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import {requiresRecoveryKey} from '../src/recovery.mjs';
 
 process.umask(0o077);
 const [sourceArg,targetArg]=process.argv.slice(2);
@@ -19,7 +20,7 @@ if(existsSync(source+'.key')){
 }
 const check=new DatabaseSync(source,{readOnly:true});
 const hasFactors=check.prepare("SELECT 1 FROM sqlite_master WHERE name='login_factors'").get();
-const requiresKey=check.prepare("SELECT COUNT(*) n FROM settings WHERE key IN('wa.accessToken','wa.appSecret','wa.verifyToken')").get().n || (hasFactors&&check.prepare('SELECT COUNT(*) n FROM login_factors').get().n);
+const requiresKey=requiresRecoveryKey(check);
 if(requiresKey&&!savedKey)throw new Error('Encrypted settings exist but the backup key sidecar is missing');
 if(check.prepare('PRAGMA quick_check').get().quick_check!=='ok' || check.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Backup integrity check failed');
 check.close();mkdirSync(dirname(target),{recursive:true,mode:0o700});copyFileSync(source,target);chmodSync(target,0o600);

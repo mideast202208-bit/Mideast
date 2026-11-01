@@ -27,6 +27,9 @@ import {canViewContactDetails,projectCustomerResponse,assertSafeStaffWrite} from
 import {handleCustomerWorkspace,recoverCustomerEmailJobs,processCustomerEmail} from './customer-workspace.mjs';
 import {handleAssistant} from './assistant.mjs';
 import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
+import {handleBackupMachine,backupDiagnostics} from './backup-routes.mjs';
+import {healthStatus} from './storage-health.mjs';
+import {startupPreflight} from './startup-preflight.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
@@ -34,8 +37,15 @@ export function createApp(options = {}) {
   const env = options.env || process.env;
   const db = options.db || openDatabase(env.DB_PATH || resolve('data/mid-east.sqlite'));
   const production = env.NODE_ENV === 'production';
+  const transport=env.RECOVERY_MODE==='1'?async()=>{fail(409,'RECOVERY_OUTBOUND_BLOCKED');}:options.transport||fetch;
+  const smtpTransportFactory=env.RECOVERY_MODE==='1'?()=>{fail(409,'RECOVERY_OUTBOUND_BLOCKED');}:options.smtpTransportFactory;
   const origin = env.PUBLIC_ORIGIN || env.RENDER_EXTERNAL_URL || 'http://127.0.0.1:3000';
   if (production && !origin.startsWith('https://')) throw new Error('Production requires HTTPS PUBLIC_ORIGIN');
+  const allowedOrigins=new Set([new URL(origin).origin]);
+  for(const value of String(env.ADDITIONAL_ORIGINS||'').split(',').map(s=>s.trim()).filter(Boolean)){
+    let u;try{u=new URL(value);}catch{throw new Error('INVALID_ADDITIONAL_ORIGIN');}
+    if(u.username||u.password||u.pathname!=='/'||u.search||u.hash||u.hostname.includes('*')||!['https:','http:'].includes(u.protocol)||production&&u.protocol!=='https:')throw new Error('INVALID_ADDITIONAL_ORIGIN');allowedOrigins.add(u.origin);
+  }
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
   recoverCustomerEmailJobs(db);
@@ -90,7 +100,8 @@ export function createApp(options = {}) {
       const method=req.method;
       const marketingImage=path.match(/^\/social-media\/([a-f0-9-]{36})$/);
       if(marketingImage&&method==='GET'){const image=db.prepare('SELECT mime,content FROM marketing_assets WHERE id=?').get(marketingImage[1]);if(!image)fail(404,'الصورة غير متاحة');res.writeHead(200,{'Content-Type':image.mime,'Cache-Control':'public,max-age=86400','Cross-Origin-Resource-Policy':'cross-origin'});res.end(image.content);return;}
-      if(path==='/health' && method==='GET'){sendJson(res,200,{status:'ok'});return;}
+      if(path==='/health' && method==='GET'){const health=healthStatus(db,env);sendJson(res,health.code,health.body);return;}
+      if(await handleBackupMachine({path,method,req,res,db,env,secretKey,jsonBody,sendJson,rateLimit}))return;
       if(path==='/webhooks/whatsapp'){
         if(method==='GET'){
           if(url.searchParams.get('hub.mode')!=='subscribe'||![config,...extraAccountConfigs(db,'whatsapp',secretKey)].some(c=>c.verifyToken&&url.searchParams.get('hub.verify_token')===c.verifyToken))fail(403,'Forbidden');
@@ -124,7 +135,7 @@ export function createApp(options = {}) {
       const write=!['GET','HEAD'].includes(method);
       let developmentSameHost=false;
       if(!production&&req.headers.origin){try{developmentSameHost=new URL(req.headers.origin).host===req.headers.host;}catch{}}
-      if(write && req.headers.origin && req.headers.origin!==origin && !developmentSameHost)fail(403,'المصدر غير مسموح');
+      if(write && req.headers.origin && !allowedOrigins.has(req.headers.origin) && !developmentSameHost)fail(403,'المصدر غير مسموح');
       if(path==='/api/setup/status'&&method==='GET'){
         sendJson(res,200,{required:!db.prepare('SELECT id FROM users LIMIT 1').get(),browser_setup:Boolean(env.BOOTSTRAP_TOKEN&&env.BOOTSTRAP_TOKEN.length>=32)});return;
       }
@@ -158,17 +169,18 @@ export function createApp(options = {}) {
         sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
+      if(path==='/api/operations/storage'&&method==='GET'){sendJson(res,200,backupDiagnostics(db,user,env));return;}
       // These render binary/HTML directly and bypass JSON projection. Staff may
       // send an authorized stored file through the server, but cannot read it.
       if(!canViewContactDetails(user)&&method==='GET'&&(/^\/api\/files\//.test(path)||/^\/api\/print\//.test(path)))fail(403,'الأصل قد يحتوي بيانات اتصال؛ اطلب نسخة منقحة من الإدارة');
-      if(await handleCustomerWorkspace({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,smtpTransportFactory:options.smtpTransportFactory}))return;
-      if(await handleMarketing({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
-      if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
-      if(await handleAssistant({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
-      if(await handleOmni({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport:options.transport||fetch}))return;
+      if(await handleCustomerWorkspace({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,smtpTransportFactory}))return;
+      if(await handleMarketing({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
+      if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
+      if(await handleAssistant({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
+      if(await handleOmni({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
       if(await handleBusiness({db,user,path,method,req,res,jsonBody,sendJson,config}))return;
       if(await handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key:secretKey}))return;
-      if(await handleExtensions({db,user,path,method,req,res,jsonBody,sendJson,config,secretKey,transport:options.transport||fetch,conversationFor}))return;
+      if(await handleExtensions({db,user,path,method,req,res,jsonBody,sendJson,config,secretKey,transport,conversationFor}))return;
       if(path==='/api/integrations' && method==='GET'){
         if(!manager(user))fail(403,'للإدارة فقط');
         const webhook=db.prepare('SELECT status,COUNT(*) count FROM webhook_events GROUP BY status').all();
@@ -367,15 +379,17 @@ export function createApp(options = {}) {
   const server=http.createServer(handler);
   server.requestTimeout=120000;
   const tick=async()=>{
-    if(sending)return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,options.transport||fetch);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,options.transport||fetch,secretKey);await sendSocialNext(db,secretKey,options.transport||fetch);await processMediaJob(db,config,options.transport||fetch,secretKey);await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{sending=false;}
+    if(sending||env.RECOVERY_MODE==='1')return;sending=true;
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,transport);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,transport,secretKey);await sendSocialNext(db,secretKey,transport);await processMediaJob(db,config,transport,secretKey);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
-  let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy)return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,options.transport||fetch);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
-  let emailBusy=false;const emailTick=async()=>{if(emailBusy)return;emailBusy=true;try{await processCustomerEmail(db,secretKey,options.smtpTransportFactory);}catch(error){options.onError?.(error);}finally{emailBusy=false;}};
-  return {server,db,tick,marketingTick,emailTick,get config(){return config;}};
+  let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy||env.RECOVERY_MODE==='1')return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,transport);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
+  let backupBusy=false;const backupTick=async()=>{if(backupBusy||env.RECOVERY_MODE==='1')return;backupBusy=true;try{await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{backupBusy=false;}};
+  let emailBusy=false;const emailTick=async()=>{if(emailBusy||env.RECOVERY_MODE==='1')return;emailBusy=true;try{await processCustomerEmail(db,secretKey,smtpTransportFactory);}catch(error){options.onError?.(error);}finally{emailBusy=false;}};
+  return {server,db,tick,marketingTick,emailTick,backupTick,get config(){return config;}};
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   process.umask(0o077);
+  await startupPreflight(process.env);
   const app=createApp({onError:error=>console.error('Operation failed:',error.name)});
   if(!app.db.prepare('SELECT id FROM users LIMIT 1').get()&&(!process.env.BOOTSTRAP_TOKEN || process.env.BOOTSTRAP_TOKEN.length<32)){
     console.error('No administrator exists. Run npm run setup before starting.');process.exit(1);
@@ -387,7 +401,8 @@ if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))
   app.server.listen(port,host,()=>console.log(`Mid East listening on ${host}:${port}`));
   const timer=setInterval(app.tick,3000);timer.unref();
   const marketingTimer=setInterval(app.marketingTick,10000);marketingTimer.unref();
+  const backupTimer=setInterval(app.backupTick,30000);backupTimer.unref();
   const emailTimer=setInterval(app.emailTick,5000);emailTimer.unref();
-  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);clearInterval(emailTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
+  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);clearInterval(backupTimer);clearInterval(emailTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
   process.on('SIGTERM',stop);process.on('SIGINT',stop);
 }

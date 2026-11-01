@@ -28,3 +28,15 @@ services:
         value: "24"
       - key: BACKUP_DIR
         value: /app/data/backups
+      - key: BACKUP_REQUIRE_ENCRYPTED
+        value: "1"
+      - key: BACKUP_SOURCE_ROOT
+        value: /app
+      - key: PERSISTENT_DATA_DIR
+        value: /app/data
+      - key: REQUIRE_PERSISTENT_STORAGE
+        value: "1"
+      - key: BACKUP_PUBLIC_KEY
+        sync: false
+      - key: BACKUP_EXPORT_TOKEN
+        sync: false

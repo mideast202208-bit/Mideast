@@ -1,0 +1,38 @@
+name: Encrypted backup to company Google Drive
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: crm-encrypted-backup
+  cancel-in-progress: false
+jobs:
+  backup:
+    if: vars.CRM_BACKUPS_ENABLED == 'true'
+    environment: crm-backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Download encrypted consistent snapshot, upload and verify private Drive copy
+        run: node scripts/offsite-backup.mjs
+        env:
+          CRM_ORIGIN: https://mid-east-platform.onrender.com
+          CRM_BACKUP_EXPORT_TOKEN: ${{ secrets.CRM_BACKUP_EXPORT_TOKEN }}
+          DRIVE_CLIENT_ID: ${{ secrets.DRIVE_CLIENT_ID }}
+          DRIVE_CLIENT_SECRET: ${{ secrets.DRIVE_CLIENT_SECRET }}
+          DRIVE_REFRESH_TOKEN: ${{ secrets.DRIVE_REFRESH_TOKEN }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      - name: Failure notice
+        if: failure()
+        run: echo '::error::Encrypted CRM backup failed. The owner must investigate this workflow run; no customer data or credentials are included in this notice.'
+# Enable GitHub Actions failure emails for the owner before activation.
+# No recovery private key, plaintext CRM archive or public artifact upload is used here.

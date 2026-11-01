@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import { migrate, migrateV3, migrateV4,migrateV5,migrateV6,migrateV7,migrateV8,migrateV9 } from './migrations.mjs';
 import {normalizeSearch} from './international.mjs';
 
+export const LATEST_SCHEMA_VERSION=9;
+
 export function openDatabase(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
