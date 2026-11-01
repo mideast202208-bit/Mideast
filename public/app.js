@@ -179,6 +179,21 @@ function arrangeRecord(form){
  if(fields)details.append(fields);if(files)details.append(files);if(chat)side.append(chat);if(followup)side.append(followup);layout.append(details,side);form.prepend(layout);
 }
 async function action(name,id){
+  if(name==='export-customers'){
+    if(user.role!=='admin')throw new Error('تصدير بيانات العملاء للمالك');
+    const query=search,visible=filtered(data.contacts).length;
+    const form=modal('تصدير العملاء إلى Excel',`<label>نطاق التصدير<select name="scope"><option value="all" ${query.trim()?'':'selected'}>كل العملاء (${data.contacts.length})</option><option value="filtered" ${query.trim()?'selected':''}>نتائج البحث الحالية (${visible})</option></select></label><p class="sub">يشمل حالة أحدث فرصة لكل عميل، وجميع حالات الفرص وملفات الطلاب المرتبطة، والخدمات المطلوبة وبيانات التواصل والمسؤول.</p><p class="sub">الملف بصيغة XLSX، مع فلترة الأعمدة وتثبيت العناوين.</p>`,'تنزيل Excel');
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();const button=form.querySelector('[type=submit]');button.disabled=true;
+      try{
+        const response=await fetch('/api/contacts/export.xlsx',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({scope:form.elements.scope.value,query:form.elements.scope.value==='filtered'?query:''})});
+        if(!response.ok){let message='تعذر تصدير العملاء';try{message=(await response.json()).error||message;}catch{}throw new Error(message);}
+        const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');
+        link.href=url;link.download=response.headers.get('content-disposition')?.match(/filename="([A-Za-z0-9-]+\.xlsx)"/)?.[1]||'Middle-East-Customers.xlsx';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+        $('#modal').close();toast('تم تجهيز ملف Excel لعدد '+response.headers.get('x-export-count')+' عميل');
+      }catch(error){$('#modalerror').textContent=error.message;}finally{button.disabled=false;}
+    });return;
+  }
   if(name==='clear-page-search'){applyPageSearch('',null);$('[data-page-search]')?.focus();return;}
   if(await studentRecords.action(name,id))return;
   if(await marketing.action(name,id))return;
