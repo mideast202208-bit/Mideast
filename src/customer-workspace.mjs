@@ -60,11 +60,11 @@ export function customerWorkspace(db,user,id,config,origin,key){
  for(const a of accounts.filter(a=>a.channel==='whatsapp')){
   const inbound=conversation?accountWindow(db,conversation,a.account_id):null;
   const known=conversation&&db.prepare('SELECT 1 FROM wa_thread_accounts WHERE conversation_id=? AND phone_id=?').get(conversation.id,a.account_id);
-  choices.push({channel:'whatsapp',account_id:a.account_id,label:a.name,available:Boolean(contact.phone),reply_window_open:windowOpen(inbound),last_inbound:inbound,templates_allowed:optIn&&String(config.phoneId)===a.account_id,thread_key:conversation&&(known||String(config.phoneId)===a.account_id)?'whatsapp:'+conversation.id+':'+a.account_id:null,reason:contact.phone?'':'لا يوجد رقم مسجل لهذا العميل'});
+  choices.push({channel:'whatsapp',account_id:a.account_id,label:a.name,available:Boolean(contact.phone),reply_window_open:Boolean(windowOpen(inbound)),last_inbound:inbound,templates_allowed:optIn&&String(config.phoneId)===a.account_id,thread_key:conversation&&(known||String(config.phoneId)===a.account_id)?'whatsapp:'+conversation.id+':'+a.account_id:null,reason:contact.phone?'':'لا يوجد رقم مسجل لهذا العميل'});
  }
  for(const channel of ['facebook','instagram']){
   const threads=db.prepare('SELECT id,account_id,last_inbound FROM social_threads WHERE contact_id=? AND channel=?').all(id,channel);
-  for(const t of threads){const a=accounts.find(a=>a.channel===channel&&a.account_id===t.account_id);if(a)choices.push({channel,account_id:t.account_id,thread_key:'social:'+t.id,label:a.name,available:true,reply_window_open:windowOpen(t.last_inbound),last_inbound:t.last_inbound});}
+  for(const t of threads){const a=accounts.find(a=>a.channel===channel&&a.account_id===t.account_id);if(a)choices.push({channel,account_id:t.account_id,thread_key:'social:'+t.id,label:a.name,available:true,reply_window_open:Boolean(windowOpen(t.last_inbound)),last_inbound:t.last_inbound});}
   if(!choices.some(c=>c.channel===channel))choices.push({channel,label:channel==='facebook'?'Messenger':'Instagram',available:false,reason:'لا توجد محادثة مرتبطة بهذا العميل على هذه القناة'});
  }
  if(!choices.some(a=>a.channel==='whatsapp'))choices.unshift({channel:'whatsapp',label:'WhatsApp',available:false,reason:'لا يوجد حساب واتساب شركة فعال'});
