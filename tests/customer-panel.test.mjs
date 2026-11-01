@@ -25,7 +25,7 @@ test('real application DOM and HTTP routes: staff notes/contact buttons work wit
  const saved={document:global.document,window:global.window,FormData:global.FormData,fetch:global.fetch,setInterval:global.setInterval,clearInterval:global.clearInterval,setTimeout:global.setTimeout,clearTimeout:global.clearTimeout},realFetch=global.fetch,realTimeout=global.setTimeout;const timers=[];
  const wait=async predicate=>{for(let i=0;i<150;i++){if(predicate())return;await new Promise(r=>realTimeout(r,10));}assert.fail('Application DOM did not reach expected state');};
  try{
-  for(const name of ['customer-panel.js','record-messenger.js','chat-ui.js','chat.css','record-views.js','record-views.css']){const asset=await realFetch(base+'/'+name);assert.equal(asset.status,200,name);assert.match(asset.headers.get('content-type'),name.endsWith('.css')?/text\/css/:/text\/javascript/);}
+  for(const name of ['customer-panel.js','record-messenger.js','chat-ui.js','chat.css','record-views.js','record-views.css','navigation.css']){const asset=await realFetch(base+'/'+name);assert.equal(asset.status,200,name);assert.match(asset.headers.get('content-type'),name.endsWith('.css')?/text\/css/:/text\/javascript/);}
   for(const role of ['agent','manager']){
    const dom=new JSDOM(readFileSync(new URL('../public/index.html',import.meta.url),'utf8'),{url:base});global.window=dom.window;global.document=dom.window.document;global.FormData=dom.window.FormData;dom.window.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};dom.window.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};
    global.setInterval=()=>0;global.clearInterval=()=>{};

@@ -1,4 +1,4 @@
-import {whatsappStatusReply} from './customer-status.mjs';
+import {whatsappLookupReply} from './customer-status.mjs';
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
 import { uid, now, audit, runAutomations, fail, text, ensureInboundLead } from './service.mjs';
@@ -72,15 +72,17 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
             db.prepare('UPDATE conversations SET last_inbound=MAX(COALESCE(last_inbound,?),?) WHERE id=?').run(received,received,conversation.id);
             runAutomations(db,'whatsapp.received',contact,messageId);
             const settings=intakeSettings(db);
-            const statusReply=windowOpen(received)&&settings.whatsapp_auto_reply&&settings.whatsapp_status_lookup===true&&kind==='text'?whatsappStatusReply(db,contact,phone,body):null;
-            if(windowOpen(received)&&settings.whatsapp_auto_reply&&(statusReply||firstInbound&&/^https?:\/\//.test(origin))){
+            const lookup=windowOpen(received)&&settings.whatsapp_auto_reply&&settings.whatsapp_status_lookup===true&&kind==='text'?whatsappLookupReply(db,contact,phone,body,{firstInbound,conversationId:conversation.id,phoneId:config.phoneId}):null;
+            const legacyWelcome=firstInbound&&/^https?:\/\//.test(origin)&&!(settings.whatsapp_status_lookup===true&&kind==='text');
+            if(windowOpen(received)&&settings.whatsapp_auto_reply&&(lookup||legacyWelcome)){
               const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
-              const body=statusReply||renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:registrationLink(contact.id,'whatsapp',key,origin)});
+              const link=/^https?:\/\//.test(origin)?registrationLink(contact.id,'whatsapp',key,origin):'';
+              const body=lookup?lookup.body+(lookup.registration&&link?'\nإذا لم تقدم طلبًا بعد، أكمل نموذج التسجيل: '+link:''):renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:link});
               const replyId=uid();
               db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
                 VALUES(?,?,?,?,?,?,?,?)`).run(replyId,conversation.id,'out','text',body,JSON.stringify({type:'text',text:{body}}),'queued',now());
               db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(replyId,config.phoneId);
-              audit(db,intake,statusReply?'auto_status':'auto_welcome','message',replyId);
+              audit(db,intake,lookup?(lookup.kind==='status'?'auto_status':lookup.kind==='prompt'?'auto_lookup_prompt':lookup.kind==='not_found'?'auto_lookup_not_found':'auto_lookup_denied'):'auto_welcome','message',replyId);
             }
           }
         }
