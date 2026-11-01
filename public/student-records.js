@@ -2,7 +2,22 @@ import {documentTypes} from './documents.js';
 
 const e=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const values=row=>{try{return typeof row.data==='string'?JSON.parse(row.data):row.data||{};}catch{return {};}};
-const normalize=value=>String(value??'').normalize('NFKC').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/[\u064B-\u065F\u0670]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+const normalize=value=>String(value??'').normalize('NFKC').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/[\u064B-\u065F\u0670]/g,'').replace(/[٠-٩]/g,c=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(c))).replace(/[۰-۹]/g,c=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(c))).replace(/\s+/g,' ').trim().toLowerCase();
+export function filterRecordsBySearch(rows,query='',related=()=>[]){
+ const q=normalize(query);if(!q)return rows;
+ return rows.filter(row=>normalize([...Object.values(row).filter(v=>typeof v==='string'),...related(row)].join(' ')).includes(q));
+}
+export function sectionSearch(label,placeholder,query,content){
+ return `<section class="section-search" role="search" aria-label="البحث في ${e(label)}"><label for="section-search-input">بحث في ${e(label)}</label><div class="section-search-controls"><input type="search" id="section-search-input" data-page-search placeholder="${e(placeholder)}" value="${e(query)}" autocomplete="off" maxlength="160"><button type="button" class="btn" data-action="clear-page-search" ${query?'':'disabled'}>مسح البحث</button></div></section><div data-search-results aria-live="polite">${content}</div>`;
+}
+// Keep the active input node in place so Arabic/mobile typing retains focus and caret.
+export function updateSectionSearch(document,query,view,source){
+ for(const control of [document.querySelector('#search'),document.querySelector('[data-page-search]')])if(control&&control!==source)control.value=query;
+ const target=document.querySelector('[data-search-results]');
+ if(target){const template=document.createElement('template');template.innerHTML=view();const next=template.content.querySelector('[data-search-results]');if(next)target.innerHTML=next.innerHTML;}
+ else{const content=document.querySelector('#content');if(content)content.innerHTML=view();}
+ const clear=document.querySelector('[data-action="clear-page-search"]');if(clear)clear.disabled=!query;
+}
 const service=row=>String(values(row).requested_service??row.requested_service??'').trim();
 const serviceKey=row=>service(row)?'value:'+service(row):'unset';
 const button=(label,action,id='')=>`<button type="button" class="btn small" data-action="${action}" data-id="${e(id)}">${e(label)}</button>`;
