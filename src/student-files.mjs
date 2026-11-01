@@ -1,4 +1,5 @@
-import {uid,now,fail,manager,getContact,audit} from './service.mjs';
+import {uid,now,fail,manager,getContact,audit,text} from './service.mjs';
+import {transaction} from './db.mjs';
 import {documentTypes} from '../public/documents.js';
 import {normalizeSearch} from './international.mjs';
 import {validateAppData} from './studio.mjs';
@@ -50,6 +51,27 @@ export function classifyDocument(db,user,id,type){
  const data=JSON.parse(row.data);studentFile(db,user,data.student);
  if(!manager(user)&&row.owner_id!==user.id)fail(404,'المستند غير متاح');
  data.document_type=type;db.prepare('UPDATE app_records SET data=?,updated_at=? WHERE id=?').run(JSON.stringify(data),now(),id);audit(db,user,'classified','student_document',id,{document_type:type});return {ok:true};
+}
+export function uploadStudentDocument(db,user,studentId,input){
+ const student=studentFile(db,user,studentId);
+ if(!Object.values(documentTypes).includes(input.document_type))fail(400,'اختر نوع المستند');
+ const app=db.prepare("SELECT id FROM studio_apps WHERE app_key='me_documents'").get();if(!app)fail(409,'تطبيق المستندات غير مجهز');
+ if(input.application){
+  const request=db.prepare("SELECT a.id,a.owner_id FROM app_records a JOIN studio_apps s ON s.id=a.app_id AND s.app_key='me_admissions' WHERE a.id=? AND json_extract(a.data,'$.student')=?").get(input.application,studentId);
+  if(!request||!manager(user)&&request.owner_id!==user.id)fail(409,'الطلب لا يخص الطالب المختار أو غير متاح');
+ }
+ const name=text(input.name,'اسم الملف',200),mime=input.mime;
+ if(typeof input.content!=='string'||input.content.length>14*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(input.content)||input.content.length%4)fail(400,'بيانات الملف غير صالحة');
+ const bytes=Buffer.from(input.content,'base64');if(!bytes.length||bytes.length>10*1024*1024)fail(413,'الحد الأقصى للملف 10 ميجابايت');
+ if(!(mime==='application/pdf'&&bytes.subarray(0,5).toString()==='%PDF-')&&!(mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)&&!(mime==='image/png'&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))))fail(400,'مسموح PDF وJPG وPNG حقيقي فقط');
+ const attachmentId=uid(),id=uid();
+ const data=validateAppData(db,user,app.id,{student:studentId,...(input.application?{application:input.application}:{}),document_type:input.document_type,document_status:'صورة مستلمة',received_date:now().slice(0,10),file_reference:attachmentId});
+ transaction(db,()=>{
+  db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(attachmentId,student.contact_id,null,name,mime,bytes,now());
+  db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(id,app.id,name,student.owner_id,data,now(),now());
+  audit(db,user,'uploaded','student_document',id,{student_id:studentId,attachment_id:attachmentId});
+ });
+ return {id,student_id:studentId,attachment_id:attachmentId};
 }
 export function attachStudentDocument(db,user,row,input,base){
  const context=threadStudents(db,user,row),student=context.selected;
