@@ -1,4 +1,8 @@
 const paths={
+ send:'M22 2L9 15 M22 2l-7 20-6-7-7-6z',
+ search:'M21 21l-5-5 M10 3a7 7 0 1 0 0 14a7 7 0 1 0 0-14',
+ refresh:'M20 7A8 8 0 1 0 21 14 M20 2v6h-6',
+ clock:'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v6l4 2',
  email:'M3 5h18v14H3z M3 6l9 7 9-7',
  history:'M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v6l4 2',
  shield:'M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6z M8 12l3 3 5-6',

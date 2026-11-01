@@ -1,4 +1,6 @@
 import nodemailer from 'nodemailer';
+import {windowOpen} from './security.mjs';
+import {accountWindow} from './whatsapp.mjs';
 import {uid,now,fail,text,manager,getContact,audit} from './service.mjs';
 import {transaction} from './db.mjs';
 import {accountSummary} from './accounts.mjs';
@@ -53,10 +55,16 @@ export function customerWorkspace(db,user,id,config,origin,key){
  const contact=getContact(db,user,id);if(user.role==='accountant')fail(403,'التواصل لفريق العملاء');
  const accounts=accountSummary(db,config,origin).filter(a=>a.active);
  const choices=[];
- for(const a of accounts.filter(a=>a.channel==='whatsapp'))choices.push({channel:'whatsapp',account_id:a.account_id,label:a.name,available:Boolean(contact.phone),reason:contact.phone?'':'لا يوجد رقم مسجل لهذا العميل'});
+ const conversation=db.prepare('SELECT * FROM conversations WHERE contact_id=?').get(id);
+ const optIn=Boolean(db.prepare('SELECT whatsapp_opt_in FROM contact_preferences WHERE contact_id=?').get(id)?.whatsapp_opt_in);
+ for(const a of accounts.filter(a=>a.channel==='whatsapp')){
+  const inbound=conversation?accountWindow(db,conversation,a.account_id):null;
+  const known=conversation&&db.prepare('SELECT 1 FROM wa_thread_accounts WHERE conversation_id=? AND phone_id=?').get(conversation.id,a.account_id);
+  choices.push({channel:'whatsapp',account_id:a.account_id,label:a.name,available:Boolean(contact.phone),reply_window_open:windowOpen(inbound),last_inbound:inbound,templates_allowed:optIn&&String(config.phoneId)===a.account_id,thread_key:conversation&&(known||String(config.phoneId)===a.account_id)?'whatsapp:'+conversation.id+':'+a.account_id:null,reason:contact.phone?'':'لا يوجد رقم مسجل لهذا العميل'});
+ }
  for(const channel of ['facebook','instagram']){
-  const threads=db.prepare('SELECT id,account_id FROM social_threads WHERE contact_id=? AND channel=?').all(id,channel);
-  for(const t of threads){const a=accounts.find(a=>a.channel===channel&&a.account_id===t.account_id);if(a)choices.push({channel,account_id:t.account_id,thread_key:'social:'+t.id,label:a.name,available:true});}
+  const threads=db.prepare('SELECT id,account_id,last_inbound FROM social_threads WHERE contact_id=? AND channel=?').all(id,channel);
+  for(const t of threads){const a=accounts.find(a=>a.channel===channel&&a.account_id===t.account_id);if(a)choices.push({channel,account_id:t.account_id,thread_key:'social:'+t.id,label:a.name,available:true,reply_window_open:windowOpen(t.last_inbound),last_inbound:t.last_inbound});}
   if(!choices.some(c=>c.channel===channel))choices.push({channel,label:channel==='facebook'?'Messenger':'Instagram',available:false,reason:'لا توجد محادثة مرتبطة بهذا العميل على هذه القناة'});
  }
  if(!choices.some(a=>a.channel==='whatsapp'))choices.unshift({channel:'whatsapp',label:'WhatsApp',available:false,reason:'لا يوجد حساب واتساب شركة فعال'});
