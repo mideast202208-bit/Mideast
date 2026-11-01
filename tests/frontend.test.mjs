@@ -12,7 +12,7 @@ test('custom app labels and renamed stages are HTML escaped',async()=>{
   data.pipeline[0].label='<script>alert(1)</script>';
   const ui=await renderFixture(data),html=ui.page('app:qa-students');
   assert.ok(html.includes('&lt;img'));assert.ok(!html.includes('<img src=x'));
-  const board=ui.page('leads');assert.ok(!board.includes('<script>alert'));assert.ok(board.includes('&lt;script&gt;'));
+  const board=ui.recordMode('leads','board');assert.ok(!board.includes('<script>alert'));assert.ok(board.includes('&lt;script&gt;'));
 });
 test('studio shows persisted form order and relation selectors in original frontend',async()=>{
   const data=structuredClone(fixture);data.appFields=[{id:'f1',app_id:'qa-students',field_key:'guardian',label:'ولي الأمر',type:'relation',relation_target:'contact',required:1,options:'[]'}];
