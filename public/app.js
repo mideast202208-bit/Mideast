@@ -16,6 +16,7 @@ const triggers = {'contact.created':'عند إضافة عميل','lead.created':
 const statusLabels = {queued:'في الطابور',accepted:'قبلتها Meta',sent:'أُرسلت',delivered:'تم التسليم',read:'مقروءة',received:'واردة',unknown:'نتيجة غير مؤكدة',failed:'تعذر الإرسال'};
 let user, csrf, data, page='dashboard', search='', selectedConversation=null, chatMessages=[], integration=null;
 let refreshTimer;
+let navigationOpen=false;
 let hubState=null,selectedSocial=null,socialMessages=[];
 let studioEntity='contact',factorState=null,dragField=null;
 const workspace=createWorkspace({api,escape,modal,bindForm,toast,render,getUser:()=>user,getData:()=>data,getPage:()=>page,getSearch:()=>search,navigate:async target=>{page=target;search='';await load();}});
@@ -61,6 +62,7 @@ function modal(title,body,submitLabel='حفظ'){
 }
 function bindForm(form,handler){form.addEventListener('submit',async event=>{event.preventDefault();const btn=form.querySelector('[type=submit]');btn.disabled=true;try{await handler(new FormData(form),form);if(!user)return;$('#modal').close();await load();toast('تم الحفظ');}catch(error){if($('#modalerror'))$('#modalerror').textContent=error.message;else toast(error.message,true);}finally{btn.disabled=false;}});}
 function login(){
+  setNavigation(false);
   recordMessenger.reset();
   clearInterval(refreshTimer);$('#app').innerHTML=`<main class="login"><div class="loginart"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><h1>كل محادثة،<br>فرصة لبداية جديدة.</h1><p>مساحة واحدة لفريقك، من أول رسالة إلى إتمام الخدمة ومتابعة العميل.</p><div class="badge">الإصدار 0.9</div></div><div class="loginform"><form id="loginform"><h2>أهلًا برجوعك</h2><p class="sub">ادخل حسابك لفتح مساحة عمل ميد إيست.</p><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" required autocomplete="username"><label>كلمة المرور</label><input name="password" type="password" dir="ltr" required autocomplete="current-password"><label>رمز تطبيق المصادقة — لو مفعل</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"><div class="formerror" id="loginerror"></div><button class="btn primary" type="submit">دخول مساحة العمل ←</button><p class="footnote">حساب المدير يُنشأ عند تجهيز السيرفر. لو نسيت كلمة المرور تواصل مع مالك النظام.</p></form></div></main>`;
   $('#loginform').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;try{const result=await api('/login','POST',Object.fromEntries(new FormData(form)));user=result.user;csrf=result.csrf;page=user.role==='accountant'?'finance':'dashboard';await load();startRefresh();}catch(error){$('#loginerror').textContent=error.message;}finally{btn.disabled=false;}});
@@ -69,15 +71,30 @@ async function load(){data=await api('/data');await workspace.load(page);if(page
 function startRefresh(){clearInterval(refreshTimer);refreshTimer=setInterval(async()=>{if(user && !$('#modal').open && page==='inbox' && !document.activeElement?.closest('form') && document.activeElement?.id!=='search'){try{data=await api('/data');if(selectedConversation)chatMessages=await api(`/conversations/${selectedConversation}/messages`);render();}catch{}}},8000);}
 const navigation=[['dashboard','◈','نظرة عامة'],['assistant','◇','مساعد الإدارة'],['communications','◉','مركز التواصل'],['marketing','◉','التسويق الاجتماعي'],['hub','⊞','مركز القنوات'],['registrations','↗','التسجيلات والملفات'],['social','◉','محادثات السوشيال'],['templates','▧','الردود والقوالب'],['lab','⚡','المختبر الافتراضي'],['contacts','♧','العملاء'],['leads','▦','فرص البيع'],['inbox','◉','صندوق المحادثات'],['tickets','▤','خدمة العملاء'],['tasks','☑','المهام والمتابعة'],['quotes','▧','عروض الأسعار'],['finance','↗','الفواتير والتحصيل'],['studio','◇','الاستوديو'],['automations','⚡','الأتمتة'],['users','◎','الفريق والصلاحيات'],['integrations','⊞','الربط والإعدادات'],['audit','≡','سجل العمليات'],['security','◇','أمان الحساب'],['operations','⊙','جاهزية التشغيل']];
 function renderNavigation(allowed){
- const groups=[['يوم العمل والتواصل',['dashboard','assistant','communications','marketing','registrations','contacts','tasks','leads','tickets']],['المبيعات والحسابات',['quotes','finance']],['ملفات الخدمات',allowed.filter(n=>n[0].startsWith('app:')).map(n=>n[0])],['أدوات القنوات',['hub','templates','social','inbox']],['الإدارة والأمان',['studio','automations','users','integrations','audit','security','operations','lab']]];
- return groups.map(([title,keys],i)=>{const items=allowed.filter(n=>keys.includes(n[0]));if(!items.length)return '';const buttons=items.map(([key,_,label])=>'<button class="nav '+(page===key?'active':'')+'" data-page="'+key+'"><span class="icon">'+brandIcon(key.startsWith('app:')?'services':key)+'</span>'+escape(label)+'</button>').join('');return i<3?'<div class="navlabel">'+title+'</div>'+buttons:'<details class="nav-group" '+(items.some(n=>n[0]===page)?'open':'')+'><summary>'+title+'</summary>'+buttons+'</details>';}).join('');
+ const groups=[['يوم العمل والتواصل',['dashboard','assistant','communications','marketing','registrations','contacts','tasks','leads','tickets','templates']],['المبيعات والحسابات',['quotes','finance']],['ملفات الخدمات',allowed.filter(n=>n[0].startsWith('app:')).map(n=>n[0])],['أدوات القنوات',['hub','social','inbox']],['الإدارة والأمان',['studio','automations','users','integrations','audit','security','operations','lab']]];
+ return groups.map(([title,keys],i)=>{const items=allowed.filter(n=>keys.includes(n[0]));if(!items.length)return '';const buttons=items.map(([key,_,label])=>'<button class="nav '+(page===key?'active':'')+'" data-page="'+key+'" '+(page===key?'aria-current="page"':'')+'><span class="icon">'+brandIcon(key.startsWith('app:')?'services':key)+'</span>'+escape(label)+'</button>').join('');return i<3?'<div class="navlabel">'+title+'</div>'+buttons:'<details class="nav-group" '+(items.some(n=>n[0]===page)?'open':'')+'><summary>'+title+'</summary>'+buttons+'</details>';}).join('');
 }
+function mobileNavigation(){return typeof window!=='undefined'&&(window.matchMedia?.('(max-width:800px)')?.matches||(window.innerWidth>0&&window.innerWidth<=800));}
+function syncNavigation(){
+ const mobile=mobileNavigation(),sidebar=$('#primary-navigation-sidebar'),main=$('#workspace-main'),toggle=$('[data-navigation-toggle]'),overlay=$('[data-navigation-overlay]');
+ $('.shell')?.classList?.toggle('navigation-open',navigationOpen);document.body?.classList?.toggle('navigation-is-open',mobile&&navigationOpen);
+ toggle?.setAttribute?.('aria-expanded',String(navigationOpen));if(overlay)overlay.hidden=!navigationOpen;
+ if(sidebar){sidebar.inert=mobile&&!navigationOpen;sidebar.setAttribute?.('aria-hidden',String(mobile&&!navigationOpen));sidebar.setAttribute?.('role',mobile?'dialog':'complementary');if(mobile&&navigationOpen)sidebar.setAttribute?.('aria-modal','true');else sidebar.removeAttribute?.('aria-modal');}
+ if(main)main.inert=mobile&&navigationOpen;
+}
+function setNavigation(open,{restoreFocus=false}={}){
+ navigationOpen=Boolean(open);syncNavigation();
+ if(navigationOpen&&mobileNavigation())$('[data-navigation-close]')?.focus?.();
+ else if(restoreFocus)$('[data-navigation-toggle]')?.focus?.();
+}
+function focusCurrentPage(){const title=$('#content h1');title?.setAttribute?.('tabindex','-1');title?.focus?.();}
 function render(){
   stages=Object.fromEntries(data.pipeline.map(s=>[s.stage_key,s.label]));
   const allNav=[...navigation,...data.apps.map(a=>['app:'+a.id,'▣',a.name])];
   const allowed=allNav.filter(([key])=>!(['studio','automations','integrations','audit','operations','hub','templates','lab','assistant','marketing'].includes(key)&&!isManager()) && !(key==='users'&&user.role!=='admin') && !(key==='finance'&&!canFinance()) && !(user.role==='accountant'&&!['finance','security','quotes'].includes(key)));
   if(!allowed.some(([key])=>key===page))page=allowed[0][0];
-  $('#app').innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div>${renderNavigation(allowed)}<div class="sidebar-bottom"><div class="userline"><span class="avatar">${escape(user.name.slice(0,1))}</span><div>${escape(user.name)}<small>${roles[user.role]}</small></div></div><button class="nav" data-action="logout">خروج من الحساب</button><div class="statusnote">مساحة عمل مستقلة<br>مساحة العمل · 0.9</div></div></aside><main class="main"><header class="topbar"><div class="breadcrumb">${escape(data.settings.company_name || 'ميد إيست')} / ${escape(allNav.find(n=>n[0]===page)?.[2])}</div><div class="topend"><input class="search" id="search" placeholder="بحث في الصفحة…" value="${escape(search)}" aria-label="بحث في الصفحة">${badge('مساحة عمل الشركة')}<span class="avatar">${escape(user.name.slice(0,1))}</span></div></header><section id="content">${view()}</section></main></div>`;
+  $('#app').innerHTML=`<div class="shell${navigationOpen?' navigation-open':''}"><button class="navigation-overlay" type="button" data-navigation-overlay aria-label="إغلاق القائمة الرئيسية" tabindex="-1" ${navigationOpen?'':'hidden'}></button><aside class="sidebar" id="primary-navigation-sidebar" aria-label="القائمة الرئيسية"><div class="sidebar-heading"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><button class="navigation-close" type="button" data-navigation-close aria-label="إغلاق القائمة الرئيسية">×</button></div><div class="sidebar-search"><label for="search">بحث في الصفحة الحالية</label><div>${brandIcon('search',17)}<input class="search" id="search" placeholder="بحث في الصفحة…" value="${escape(search)}" aria-label="بحث في الصفحة"></div></div><nav class="primary-navigation" aria-label="صفحات المنصة">${renderNavigation(allowed)}</nav><div class="sidebar-bottom"><div class="userline"><span class="avatar">${escape(user.name.slice(0,1))}</span><div>${escape(user.name)}<small>${roles[user.role]}</small></div></div><button class="nav" data-action="logout">خروج من الحساب</button><div class="statusnote">مساحة عمل مستقلة<br>مساحة العمل · 0.9</div></div></aside><main class="main" id="workspace-main"><header class="topbar"><button type="button" class="navigation-toggle" data-navigation-toggle aria-controls="primary-navigation-sidebar" aria-expanded="${navigationOpen}">${brandIcon('list',21)}<span>القائمة الرئيسية</span></button><div class="breadcrumb"><span>${escape(data.settings.company_name || 'ميد إيست')}</span><b>${escape(allNav.find(n=>n[0]===page)?.[2])}</b></div></header><section id="content">${view()}</section></main></div>`;
+  syncNavigation();
   $('#search').addEventListener('input',event=>{search=event.target.value;$('#content').innerHTML=view();});
 }
 function view(){
@@ -205,15 +222,26 @@ async function action(name,id){
   }
 }
 document.addEventListener('click',async event=>{
+  if(event.target.closest('[data-navigation-toggle]')){setNavigation(!navigationOpen);return;}
+  if(event.target.closest('[data-navigation-close],[data-navigation-overlay]')){setNavigation(false,{restoreFocus:true});return;}
   const close=event.target.closest('[data-close]');if(close){$('#modal').close();return;}
   const target=event.target.closest('[data-page],[data-action],[data-task],[data-conversation]');if(!target)return;
   try{
-    if(target.dataset.page){page=target.dataset.page;search='';await load();if(page==='audit'){const rows=await api('/audit');$('#auditpanel').innerHTML=rows.length?`<div class="tablewrap"><table><thead><tr><th>الوقت</th><th>المستخدم</th><th>الإجراء</th><th>السجل</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${new Date(r.created_at).toLocaleString('ar-EG')}</td><td>${escape(r.user_name||'النظام')}</td><td>${escape(r.action)}</td><td>${escape(r.entity)} <small class="mono">${escape(r.entity_id.slice(0,8))}</small></td></tr>`).join('')}</tbody></table></div>`:empty('لا توجد عمليات');}return;}
+    if(target.dataset.page){const fromDrawer=navigationOpen&&mobileNavigation();setNavigation(false);page=target.dataset.page;search='';await load();if(fromDrawer)focusCurrentPage();if(page==='audit'){const rows=await api('/audit');$('#auditpanel').innerHTML=rows.length?`<div class="tablewrap"><table><thead><tr><th>الوقت</th><th>المستخدم</th><th>الإجراء</th><th>السجل</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${new Date(r.created_at).toLocaleString('ar-EG')}</td><td>${escape(r.user_name||'النظام')}</td><td>${escape(r.action)}</td><td>${escape(r.entity)} <small class="mono">${escape(r.entity_id.slice(0,8))}</small></td></tr>`).join('')}</tbody></table></div>`:empty('لا توجد عمليات');}return;}
     if(target.dataset.action)await action(target.dataset.action,target.dataset.id);
     if(target.dataset.task){const t=data.tasks.find(t=>t.id===target.dataset.task);await api('/tasks/'+t.id,'PATCH',{status:t.status==='done'?'open':'done'});await load();}
     if(target.dataset.conversation){selectedConversation=target.dataset.conversation;chatMessages=await api(`/conversations/${selectedConversation}/messages`);render();}
   }catch(error){toast(error.message,true);}
 });
+document.addEventListener('keydown',event=>{
+ if(!navigationOpen||!mobileNavigation()||$('#modal')?.open)return;
+ if(event.key==='Escape'){event.preventDefault();setNavigation(false,{restoreFocus:true});return;}
+ if(event.key!=='Tab')return;
+ const items=[...$('#primary-navigation-sidebar').querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],summary,[tabindex]:not([tabindex="-1"])')].filter(el=>el.getClientRects().length&&!el.hidden),first=items[0],last=items.at(-1);if(!first)return;
+ if(event.shiftKey&&(document.activeElement===first||!$('#primary-navigation-sidebar').contains(document.activeElement))){event.preventDefault();last.focus();}
+ else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+});
+if(typeof window!=='undefined')window.addEventListener('resize',()=>{if(!mobileNavigation())navigationOpen=false;syncNavigation();});
 document.addEventListener('change',async event=>{
   try{if(event.target.dataset.recordOrder){recordViews.order(event.target.dataset.recordOrder,event.target.value);render();return;}if(event.target.dataset.stage){await api('/leads/'+event.target.dataset.stage,'PATCH',{stage:event.target.value});await load();toast('تم تحديث المرحلة');}
     if(event.target.dataset.ticket){await api('/tickets/'+event.target.dataset.ticket,'PATCH',{status:event.target.value});await load();toast('تم تحديث التذكرة');}}

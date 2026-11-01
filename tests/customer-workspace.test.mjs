@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openDatabase} from '../src/db.mjs';
 import {createApp} from '../src/server.mjs';
-import {uid,now} from '../src/service.mjs';
+import {uid,now,audit} from '../src/service.mjs';
 import {token,hash} from '../src/security.mjs';
 import {processCustomerEmail,recoverCustomerEmailJobs} from '../src/customer-workspace.mjs';
 import {installEducationWorkspace} from '../src/education.mjs';
@@ -75,6 +75,16 @@ test('notes, record updates, sends and viewing have a scoped author/time timelin
 });
 test('migration 9 is additive and does not rewrite existing customer contact values',async()=>{
  const f=await fixture();try{assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);assert.equal(f.db.prepare('SELECT phone FROM contacts WHERE id=?').get(f.c.id).phone,f.c.phone);assert.equal(f.db.prepare('PRAGMA quick_check').get().quick_check,'ok');assert.equal(f.db.prepare('PRAGMA foreign_key_check').all().length,0);}finally{await f.close();}
+});
+test('automatic WhatsApp identity events remain system activity without replacing the last employee followup',async()=>{
+ const f=await fixture();try{
+  assert.equal((await f.request('agent','/contacts/'+f.c.id+'/notes','POST',{body:'Synthetic staff followup'})).status,201);
+  const conversation=uid(),messageId=uid();f.db.prepare('INSERT INTO conversations(id,contact_id,created_at) VALUES(?,?,?)').run(conversation,f.c.id,now());
+  f.db.prepare('INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at) VALUES(?,?,?,?,?,?,?,?)').run(messageId,conversation,'out','text','Synthetic lookup prompt','{}','queued',now());
+  audit(f.db,f.users.owner,'auto_lookup_prompt','message',messageId);
+  const view=await f.request('agent','/contacts/'+f.c.id+'/workspace'),event=view.data.timeline.find(e=>e.action==='auto_lookup_prompt');
+  assert.equal(event.actor_kind,'system');assert.equal(event.author,'المساعد الآلي');assert.equal(event.label,'طلب تعريف الملف على واتساب');assert.equal(view.data.last_staff_activity.action,'noted');assert.equal(view.data.last_staff_activity.author,'Synthetic agent');
+ }finally{await f.close();}
 });
 test('company email identity can be saved as a disabled draft; credentials never carry to a different mailbox',async()=>{
  const f=await fixture();try{
