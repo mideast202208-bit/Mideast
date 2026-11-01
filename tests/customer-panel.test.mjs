@@ -25,7 +25,7 @@ test('real application DOM and HTTP routes: staff notes/contact buttons work wit
  const saved={document:global.document,window:global.window,FormData:global.FormData,fetch:global.fetch,setInterval:global.setInterval,clearInterval:global.clearInterval,setTimeout:global.setTimeout,clearTimeout:global.clearTimeout},realFetch=global.fetch,realTimeout=global.setTimeout;const timers=[];
  const wait=async predicate=>{for(let i=0;i<150;i++){if(predicate())return;await new Promise(r=>realTimeout(r,10));}assert.fail('Application DOM did not reach expected state');};
  try{
-  for(const name of ['customer-panel.js','record-messenger.js','chat-ui.js','chat.css']){const asset=await realFetch(base+'/'+name);assert.equal(asset.status,200,name);assert.match(asset.headers.get('content-type'),name.endsWith('.css')?/text\/css/:/text\/javascript/);}
+  for(const name of ['customer-panel.js','record-messenger.js','chat-ui.js','chat.css','record-views.js','record-views.css']){const asset=await realFetch(base+'/'+name);assert.equal(asset.status,200,name);assert.match(asset.headers.get('content-type'),name.endsWith('.css')?/text\/css/:/text\/javascript/);}
   for(const role of ['agent','manager']){
    const dom=new JSDOM(readFileSync(new URL('../public/index.html',import.meta.url),'utf8'),{url:base});global.window=dom.window;global.document=dom.window.document;global.FormData=dom.window.FormData;dom.window.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};dom.window.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};
    global.setInterval=()=>0;global.clearInterval=()=>{};
@@ -33,6 +33,7 @@ test('real application DOM and HTTP routes: staff notes/contact buttons work wit
    await import('../public/app.js?customer-panel-role='+role);assert.ok(document.querySelector('[data-page="contacts"]'));
    document.querySelector('[data-page="contacts"]').click();await wait(()=>document.querySelector('[data-action="edit-contact"]'));
    if(role==='agent'){assert.ok(!document.querySelector('#app').innerHTML.includes(contact.phone));assert.ok(!document.querySelector('#app').innerHTML.includes(contact.email));}
+   for(const mode of ['table','list','cards']){document.querySelector('[data-id="contacts|'+mode+'"]').click();await wait(()=>document.querySelector('[data-record-mode="'+mode+'"]'));assert.equal(document.querySelectorAll('[data-record-id]').length,1);if(role==='agent')assert.ok(!document.querySelector('#app').innerHTML.includes(contact.phone));}
    document.querySelector('[data-action="edit-contact"]').click();await wait(()=>document.querySelectorAll('.customer-channel').length===4);
    if(role==='agent'){
     assert.equal(document.querySelector('#editor [name="phone"]'),null);assert.equal(document.querySelector('#editor [name="email"]'),null);assert.ok(!document.querySelector('#modal').innerHTML.includes(contact.phone));assert.ok(!document.querySelector('#modal').innerHTML.includes(contact.email));

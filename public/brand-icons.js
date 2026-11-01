@@ -1,4 +1,8 @@
 const paths={
+ grid:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+ list:'M8 5h13 M8 12h13 M8 19h13 M3 5h.01 M3 12h.01 M3 19h.01',
+ table:'M3 4h18v16H3z M3 9h18 M3 14h18 M9 4v16 M15 4v16',
+ board:'M3 4h5v16H3z M10 4h5v10h-5z M17 4h5v13h-5z',
  send:'M22 2L9 15 M22 2l-7 20-6-7-7-6z',
  search:'M21 21l-5-5 M10 3a7 7 0 1 0 0 14a7 7 0 1 0 0-14',
  refresh:'M20 7A8 8 0 1 0 21 14 M20 2v6h-6',
