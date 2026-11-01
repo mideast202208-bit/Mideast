@@ -5,7 +5,7 @@ import {mkdtempSync,readFileSync,writeFileSync,rmSync,existsSync,mkdirSync} from
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {openDatabase} from '../src/db.mjs';
+import {LATEST_SCHEMA_VERSION,openDatabase} from '../src/db.mjs';
 import {encryptSecret,decryptSecret} from '../src/integration-settings.mjs';
 import {createRecoveryBundle,restoreRecoveryBundle,requiresRecoveryKey} from '../src/recovery.mjs';
 import {healthStatus} from '../src/storage-health.mjs';
@@ -52,7 +52,7 @@ test('machine backup scope never grants CRM access, and storage diagnostics rema
  try{
   assert.equal((await fetch(base+'/internal/backup/export',{method:'POST'})).status,401);assert.equal((await fetch(base+'/api/data',{headers:{Authorization:'Bearer '+machine}})).status,401);
   const login=async email=>{const r=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:'Synthetic-recovery-only-2026!'})});const b=await r.json();return {Cookie:r.headers.get('set-cookie').split(';')[0],'X-CSRF-Token':b.csrf};};
-  const owner=await login('owner@example.test'),other=await login('agent@example.test');assert.equal((await fetch(base+'/api/operations/storage',{headers:owner})).status,200);assert.equal((await fetch(base+'/api/operations/storage',{headers:other})).status,403);assert.equal((await fetch(base+'/api/export',{headers:other})).status,403);assert.equal((await fetch(base+'/api/files/file',{headers:other})).status,404);
+  const owner=await login('owner@example.test'),other=await login('agent@example.test');assert.equal((await fetch(base+'/api/operations/storage',{headers:owner})).status,200);assert.equal((await fetch(base+'/api/operations/storage',{headers:other})).status,403);assert.equal((await fetch(base+'/api/export',{headers:other})).status,403);assert.equal((await fetch(base+'/api/files/file',{headers:other})).status,403);
   const r=await fetch(base+'/internal/backup/export',{method:'POST',headers:{Authorization:'Bearer '+machine}});assert.equal(r.status,200);const bytes=Buffer.from(await r.arrayBuffer());assert.equal(createHash('sha256').update(bytes).digest('hex'),r.headers.get('x-backup-sha256'));assert.ok(!bytes.includes(Buffer.from('Synthetic student')));
   const ack=await fetch(base+'/internal/backup/receipt',{method:'POST',headers:{Authorization:'Bearer '+machine,'Content-Type':'application/json'},body:JSON.stringify({sha256:r.headers.get('x-backup-sha256'),file_id:'synthetic-drive-file'})});assert.equal(ack.status,200);assert.ok(f.db.prepare("SELECT value FROM settings WHERE key='operations.last_offsite_at'").get().value);
  }finally{await new Promise(r=>app.server.close(r));f.db.close();rmSync(f.folder,{recursive:true,force:true});}
@@ -69,10 +69,47 @@ test('an explicit temporary CRM domain can sign in during DNS transition while f
 });
 test('a pending migration is blocked without encryption and takes a consistent encrypted pre-migration snapshot before changing schema',async()=>{
  const f=await fixture();try{
-  f.db.exec('DROP TABLE marketing_occurrences; DROP TABLE marketing_plans; DELETE FROM schema_versions WHERE version=8;');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
-  await assert.rejects(()=>startupPreflight(env),/MIGRATION_REQUIRES_ENCRYPTED_BACKUP/);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,7);
-  const preflight=await startupPreflight({...env,BACKUP_PUBLIC_KEY:keys.publicKey});assert.equal(preflight.migration_pending,true);assert.ok(preflight.backup.sha256);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,7);
-  const restored=await restoreRecoveryBundle(join(env.BACKUP_DIR,preflight.backup.filename),join(f.folder,'pre-migration-restore'),keys.privateKey);assert.equal(restored.schema_version,7);assert.equal(restored.table_counts.attachments,1);
-  f.db.exec('INSERT INTO schema_versions VALUES(9)');await assert.rejects(()=>startupPreflight(env),/DATABASE_NEWER_THAN_APPLICATION/);
+  f.db.exec('DROP TABLE customer_email_jobs; DELETE FROM schema_versions WHERE version=9;');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
+  await assert.rejects(()=>startupPreflight(env),/MIGRATION_REQUIRES_ENCRYPTED_BACKUP/);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,8);
+  const preflight=await startupPreflight({...env,BACKUP_PUBLIC_KEY:keys.publicKey});assert.equal(preflight.migration_pending,true);assert.ok(preflight.backup.sha256);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,8);
+  const restored=await restoreRecoveryBundle(join(env.BACKUP_DIR,preflight.backup.filename),join(f.folder,'pre-migration-restore'),keys.privateKey);assert.equal(restored.schema_version,8);assert.equal(restored.table_counts.attachments,1);
+  f.db.exec('INSERT INTO schema_versions VALUES(10)');await assert.rejects(()=>startupPreflight(env),/DATABASE_NEWER_THAN_APPLICATION/);
  }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
+});
+
+function syntheticMail(f){
+ const smtp={host:'smtp.gmail.com',port:465,user:'company@example.test',from:'company@example.test',pass:'synthetic-mail-secret',verified_at:now()};
+ f.db.prepare("INSERT INTO settings VALUES('email.smtp',?)").run(encryptSecret(JSON.stringify(smtp),key));
+ f.db.prepare("UPDATE contacts SET email='student@example.test' WHERE id='contact'").run();
+ f.db.prepare("INSERT INTO customer_email_jobs(id,contact_id,created_by,request_key,recipient_cipher,subject,body,status,created_at,updated_at) VALUES('mail','contact',?,'synthetic-recovery-mail',?,'Synthetic subject','Synthetic body','queued',?,?)").run(f.user,encryptSecret('student@example.test',key),now(),now());
+ return smtp;
+}
+test('current schema and SMTP credentials and queued recipients survive authenticated recovery',async()=>{
+ const f=await fixture();try{
+  assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,LATEST_SCHEMA_VERSION);
+  syntheticMail(f);f.db.prepare("DELETE FROM settings WHERE key='wa.accessToken'").run();
+  assert.equal(requiresRecoveryKey(f.db),true);
+  await assert.rejects(()=>createRecoveryBundle(f.db,null,{directory:join(f.folder,'b'),sourceRoot,publicKey:keys.publicKey}),/RECOVERY_KEY_REQUIRED/);
+  const bundle=await createRecoveryBundle(f.db,key,{directory:join(f.folder,'b'),sourceRoot,publicKey:keys.publicKey});
+  const target=join(f.folder,'restored-mail');await restoreRecoveryBundle(bundle.path,target,keys.privateKey);
+  const db=new DatabaseSync(join(target,'data/mid-east.sqlite'));try{
+   assert.equal(JSON.parse(decryptSecret(db.prepare("SELECT value FROM settings WHERE key='email.smtp'").get().value,key)).pass,'synthetic-mail-secret');
+   assert.equal(decryptSecret(db.prepare("SELECT recipient_cipher FROM customer_email_jobs WHERE id='mail'").get().recipient_cipher,key),'student@example.test');
+   assert.equal(db.prepare("SELECT status FROM customer_email_jobs WHERE id='mail'").get().status,'queued');
+  }finally{db.close();}
+ }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
+});
+test('recovery prevents queued SMTP sends and direct SMTP verification even with a configured mailbox',async()=>{
+ const f=await fixture();syntheticMail(f);let calls=0;const blocked=()=>{calls++;throw Error('Synthetic transport must not be called');};
+ const app=createApp({db:f.db,secretKey:key,env:{RECOVERY_MODE:'1',PUBLIC_ORIGIN:'http://127.0.0.1:3000'},transport:blocked,smtpTransportFactory:blocked});
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+app.server.address().port;
+ try{
+  await app.tick();await app.marketingTick();await app.emailTick();await app.backupTick();
+  assert.equal(f.db.prepare("SELECT status FROM customer_email_jobs WHERE id='mail'").get().status,'queued');
+  const login=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'owner@example.test',password:'Synthetic-recovery-only-2026!'})});
+  assert.equal(login.status,200);const {csrf}=await login.json();
+  const response=await fetch(base+'/api/customer-mail/verify',{method:'POST',headers:{'Content-Type':'application/json',Cookie:login.headers.get('set-cookie').split(';')[0],'X-CSRF-Token':csrf},body:'{}'});
+  assert.equal(response.status,409);assert.equal(calls,0);
+  assert.equal(JSON.parse(decryptSecret(f.db.prepare("SELECT value FROM settings WHERE key='email.smtp'").get().value,key)).verified_at!==undefined,true);
+ }finally{await new Promise(r=>app.server.close(r));f.db.close();rmSync(f.folder,{recursive:true,force:true});}
 });

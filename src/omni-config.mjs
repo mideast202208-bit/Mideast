@@ -6,7 +6,7 @@ import {extraAccountConfig,accountLimits,accountSummary} from './accounts.mjs';
 export const channelNames={website:'الموقع',facebook:'فيسبوك',instagram:'إنستجرام',whatsapp:'واتساب',api:'API',manual:'يدوي'};
 export function ensureOmniDefaults(db){
   if(!db.prepare('SELECT id FROM users LIMIT 1').get()||db.prepare("SELECT value FROM settings WHERE key='omni.initialized.v4'").get())return;
-  const defaults={enabled:true,website:'https://mideastedu-eg.com',facebook:'https://www.facebook.com/mideastedu',instagram:'https://www.instagram.com/mideastedu/',whatsapp:'201130343708',welcome_template:'',welcome_language:'ar',welcome_slots:['name','reference','receipt_url'],social_auto_reply:true};
+  const defaults={enabled:true,website:'https://mideastedu-eg.com',facebook:'https://www.facebook.com/mideastedu',instagram:'https://www.instagram.com/mideastedu/',whatsapp:'201130343708',welcome_template:'',welcome_language:'ar',welcome_slots:['name','reference','receipt_url'],social_auto_reply:true,whatsapp_status_lookup:false};
   db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run('omni.intake',JSON.stringify(defaults));
   for(const channel of ['facebook','instagram'])db.prepare('INSERT OR IGNORE INTO channel_accounts(channel,profile_url,created_at) VALUES(?,?,?)').run(channel,defaults[channel],now());
   for(const [id,name,body,category] of [
@@ -21,7 +21,7 @@ export function intakeSettings(db){return JSON.parse(db.prepare("SELECT value FR
 export function setIntakeSettings(db,user,input){
   if(user.role!=='admin')fail(403,'إعداد بوابة التسجيل للمالك');
   const current=intakeSettings(db),next={...current};
-  for(const key of ['enabled','social_auto_reply','whatsapp_auto_reply'])if(input[key]!==undefined){if(typeof input[key]!=='boolean')fail(400,'حالة غير صالحة');next[key]=input[key];}
+  for(const key of ['enabled','social_auto_reply','whatsapp_auto_reply','whatsapp_status_lookup'])if(input[key]!==undefined){if(typeof input[key]!=='boolean')fail(400,'حالة غير صالحة');next[key]=input[key];}
   for(const key of ['website','facebook','instagram'])if(input[key]!==undefined){
     let url;try{url=new URL(input[key]);}catch{fail(400,'رابط غير صالح');}
     if(url.protocol!=='https:'||url.username||url.password||url.port||url.search||url.hash)fail(400,'استخدم رابط HTTPS بدون رموز سرية أو معاملات');

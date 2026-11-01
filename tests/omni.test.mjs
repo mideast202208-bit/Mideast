@@ -59,7 +59,7 @@ test('v0.4 intake, channels, public privacy, and simulation',async t=>{
       assert.equal((await request('/receipt/'+'0'.repeat(64))).status,404);
       const file=db.prepare('SELECT file_id FROM intake_registrations LIMIT 1').get().file_id;
       assert.equal((await request('/api/files/'+file)).status,401);
-      assert.equal((await request('/api/files/'+file,'GET',undefined,logins.other)).status,404);
+      assert.equal((await request('/api/files/'+file,'GET',undefined,logins.other)).status,403);
       assert.equal((await request('/api/hub','GET',undefined,logins.accountant)).status,403);
     });
     await t.test('public consent, origin, honeypot, and real file validation reject invalid input before persistence',async()=>{

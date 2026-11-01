@@ -1,3 +1,4 @@
+import {windowOpen} from './security.mjs';
 import {fail,manager,getContact,now,audit,text} from './service.mjs';
 import {queueMessage,accountWindow} from './whatsapp.mjs';
 import {socialThread,queueSocialReply} from './social.mjs';
@@ -39,7 +40,8 @@ export function communicationData(db,user,base,origin){
   const last=r.kind==='social'?db.prepare('SELECT body,created_at FROM social_messages WHERE thread_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(r.id):db.prepare('SELECT m.body,m.created_at FROM messages m LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.conversation_id=? AND COALESCE(a.phone_id,?)=? ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1').get(r.id,base.phoneId||'',r.account_id);
   const unread=r.kind==='social'?db.prepare("SELECT COUNT(*) n FROM social_messages WHERE thread_id=? AND direction='in' AND created_at>?").get(r.id,seen).n:db.prepare("SELECT COUNT(*) n FROM messages m LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.conversation_id=? AND COALESCE(a.phone_id,?)=? AND m.direction='in' AND m.created_at>?").get(r.id,base.phoneId||'',r.account_id,seen).n;
   const students=findStudents(db,user,'',r.contact_id);
-  return {key:r.key,thread_id:r.id,kind:r.kind,channel:r.channel,account_id:r.account_id,account_name:accountName(r.channel,r.account_id),contact_id:r.contact_id,name:r.name,phone:r.phone,student_names:students.map(s=>s.name).join(' '),file_references:students.map(s=>s.reference).join(' '),owner_id:r.owner_id,last_inbound:r.last_inbound,last_at:last?.created_at||r.created_at,preview:last?.body||'',unread,status:db.prepare('SELECT status FROM communication_thread_state WHERE thread_key=?').get(r.key)?.status||'open'};
+  const opportunities=db.prepare("SELECT COUNT(*) total,SUM(CASE WHEN stage NOT IN('won','lost') THEN 1 ELSE 0 END) active FROM leads WHERE contact_id=?"+(manager(user)?'':' AND owner_id=?')).get(r.contact_id,...(manager(user)?[]:[user.id]));
+  return {opportunity_count:opportunities.total,open_opportunity_count:opportunities.active||0,key:r.key,thread_id:r.id,kind:r.kind,channel:r.channel,account_id:r.account_id,account_name:accountName(r.channel,r.account_id),contact_id:r.contact_id,name:r.name,phone:r.phone,student_names:students.map(s=>s.name).join(' '),file_references:students.map(s=>s.reference).join(' '),owner_id:r.owner_id,last_inbound:r.last_inbound,reply_window_open:Boolean(windowOpen(r.last_inbound)),last_at:last?.created_at||r.created_at,preview:last?.body||'',unread,status:db.prepare('SELECT status FROM communication_thread_state WHERE thread_key=?').get(r.key)?.status||'open'};
  }).sort((a,b)=>b.last_at.localeCompare(a.last_at)).slice(0,500);
  return {accounts,limits:{...accountLimits,tiktok:10,youtube:10},threads,totals:{all:threads.length,unread:threads.filter(t=>t.unread).length,open:threads.filter(t=>t.status==='open').length},provider_limits:'حدود Meta وصلاحيات الحساب مستقلة عن حد المنصة',supported_channels:['facebook','instagram','whatsapp','tiktok','youtube']};
 }
@@ -80,9 +82,27 @@ export async function handleCommunication(ctx){
    const context=threadStudents(db,user,row);if(context.requires_choice)fail(409,'هذا الرقم مرتبط بأكثر من طالب؛ اختر الملف قبل الرد');
    const student=context.selected;if(input.student_id&&input.student_id!==student?.id)fail(409,'تغير ملف الطالب المختار؛ حدّث المحادثة قبل الإرسال');
    if(input.include_reference&&!student)fail(409,'اختر ملف الطالب لإدراج رقمه');
-   const reply=text(input.body,'الرسالة',4096);
-   const body=input.include_reference?'بخصوص ملف '+student.reference+' — '+student.name+'\n'+reply:reply;
-   const result=row.kind==='social'?queueSocialReply(db,user,row.id,body):queueMessage(db,user,row,{kind:'text',body},row.config);
+   // This endpoint always resolves the recipient and sending account from the scoped thread.
+   if(['to','phone','email','recipient','account_id','contact_id'].some(k=>k in input))fail(400,'جهة الإرسال يحددها ملف العميل على الخادم');
+   let result;
+   if(input.kind==='template'){
+    if(row.kind!=='whatsapp')fail(400,'القوالب المعتمدة متاحة لواتساب فقط');
+    const preference=db.prepare('SELECT whatsapp_opt_in FROM contact_preferences WHERE contact_id=?').get(row.contact_id);
+    if(!preference?.whatsapp_opt_in)fail(409,'سجّل موافقة العميل على بدء التواصل أولًا');
+    const template=db.prepare("SELECT * FROM wa_templates WHERE name=? AND language=? AND status='APPROVED'").get(input.template_name||'',input.language||'ar');
+    if(!template)fail(409,'اختر قالبًا معتمدًا من آخر مزامنة');
+    let components;try{components=JSON.parse(template.components);}catch{fail(409,'بيانات القالب تحتاج مزامنة');}
+    if(!Array.isArray(components)||!components.every(c=>c&&(c.type==='BODY'||c.type==='FOOTER'||c.type==='HEADER'&&c.format==='TEXT'&&!String(c.text||'').includes('{{'))))fail(409,'هذا القالب يحتاج تجهيز وسائط أو أزرار قبل الإرسال');
+    const body=String(components.find(c=>c.type==='BODY')?.text||'');if(/\{\{(?!\d+\}\})/.test(body))fail(409,'هذا القالب يستخدم متغيرات غير مدعومة في الإرسال المبسط');const variables=[...new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map(m=>Number(m[1])))].sort((a,b)=>a-b),supplied=input.components||[];
+    if(!Array.isArray(supplied)||supplied.length>(variables.length?1:0))fail(400,'متغيرات القالب غير صالحة');
+    const parameters=supplied[0]?.parameters||[];
+    if(!Array.isArray(parameters)||variables.some((n,i)=>n!==i+1)||parameters.length!==variables.length||supplied.length&&supplied[0].type!=='body'||parameters.some(p=>!p||p.type!=='text'||typeof p.text!=='string'||!p.text.trim()||p.text.length>500))fail(400,'أكمل متغيرات القالب النصية بالترتيب');
+    result=queueMessage(db,user,row,{kind:'template',template_name:template.name,language:template.language,components:parameters.length?[{type:'body',parameters:parameters.map(p=>({type:'text',text:p.text}))}]:[]},row.config);
+   }else{
+    const reply=text(input.body,'الرسالة',4096);
+    const body=input.include_reference?'بخصوص ملف '+student.reference+' — '+student.name+'\n'+reply:reply;
+    result=row.kind==='social'?queueSocialReply(db,user,row.id,body):queueMessage(db,user,row,{kind:'text',body},row.config);
+   }
    if(student)db.prepare('INSERT INTO message_student_links VALUES(?,?,?,?,?)').run(row.kind,result.id,student.id,student.reference,now());
    return send(201,result);
   }

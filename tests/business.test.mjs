@@ -45,10 +45,12 @@ test('v0.3 quotations, customer notes, printable documents and readiness',async 
     });
     await t.test('print routes protect customer data and escape all dynamic HTML',async()=>{
       assert.equal((await request('/print/quote/'+quoteId)).status,401);
-      assert.equal((await request('/print/quote/'+quoteId,'GET',undefined,other)).status,404);
-      const quote=await request('/print/quote/'+quoteId,'GET',undefined,agent);assert.equal(quote.status,200);assert.ok(!quote.body.includes('<img src=x'));assert.ok(quote.body.includes('&lt;script&gt;'));
+      assert.equal((await request('/print/quote/'+quoteId,'GET',undefined,other)).status,403);
+      assert.equal((await request('/print/quote/'+quoteId,'GET',undefined,agent)).status,403);
+      const quote=await request('/print/quote/'+quoteId,'GET',undefined,owner);assert.equal(quote.status,200);assert.ok(!quote.body.includes('<img src=x'));assert.ok(quote.body.includes('&lt;script&gt;'));
       assert.equal((await request('/print/invoice/'+invoiceId,'GET',undefined,agent)).status,403);
-      assert.equal((await request('/print/invoice/'+invoiceId,'GET',undefined,accountant)).status,200);
+      assert.equal((await request('/print/invoice/'+invoiceId,'GET',undefined,accountant)).status,403);
+      assert.equal((await request('/print/invoice/'+invoiceId,'GET',undefined,owner)).status,200);
     });
     await t.test('customer notes follow contact ownership and do not alter original record',async()=>{
       assert.equal((await request('/contacts/'+contact.id+'/notes','POST',{body:'Synthetic followup note'},agent)).status,201);
@@ -68,7 +70,7 @@ test('v0.3 quotations, customer notes, printable documents and readiness',async 
     });
     await t.test('readiness is restricted and does not invent successful live connectivity',async()=>{
       assert.equal((await request('/operations','GET',undefined,agent)).status,403);
-      const result=await request('/operations','GET',undefined,owner);assert.equal(result.status,200);assert.equal(result.body.database.integrity,'ok');assert.equal(result.body.database.schema_version,8);
+      const result=await request('/operations','GET',undefined,owner);assert.equal(result.status,200);assert.equal(result.body.database.integrity,'ok');assert.equal(result.body.database.schema_version,9);
       assert.equal(result.body.whatsapp.live_acceptance_verified,false);assert.equal(result.body.deployment.public_hosting_verified,false);
       assert.ok(!JSON.stringify(result.body).includes(contact.name));
     });

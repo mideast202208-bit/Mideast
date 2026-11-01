@@ -1,0 +1,55 @@
+/* Middle East customer service: navy structure, green actions, readable Arabic. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.record-modal{max-width:1240px;width:calc(100% - 40px);border:1px solid #d7e5e3;border-radius:22px;background:#f6f9f9}
+.record-modal .modalhead{background:#123346;color:#fff;padding:19px 26px;position:sticky;top:0;z-index:3;border:0}
+.record-modal .modalhead h2{font-size:18px;letter-spacing:0}.record-modal .close{background:#ffffff15;color:#fff;width:34px;height:34px;border:1px solid #ffffff30;border-radius:10px}
+.record-modal .modalbody{padding:20px}.record-layout{display:grid;grid-template-columns:minmax(280px,.75fr) minmax(0,1.25fr);gap:20px;align-items:start}
+.record-details,.record-conversation{min-width:0}.record-details{background:white;border:1px solid #e0e9e8;border-radius:16px;padding:20px}
+.record-details .formgrid{grid-template-columns:1fr}.record-details input,.record-details select{background:#f9fbfb;border-color:#dce6e7}
+.record-conversation>.customer-workspace{margin:0;padding:0;border:0}.record-conversation h3{font-size:15px;color:#17394a}
+.record-modal .modalfoot{border-top:1px solid #dce6e7;padding-top:18px}.record-modal .modalfoot .btn.primary{background:#147d66;border-color:#147d66}
+.record-modal .customer-channel-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.record-modal .customer-channel{padding:11px 12px;border-radius:12px;background:#fff;border:1px solid #dce6e7;min-height:66px;align-items:center;color:#234655;cursor:pointer}
+.record-modal .customer-channel b{font-size:12px}.record-modal .customer-channel small{font-size:10px;margin-top:3px;color:#627b81;line-height:1.6}
+.record-modal .customer-channel.whatsapp>.brand-icon{color:#128265}.record-modal .customer-channel.facebook>.brand-icon{color:#2561ab}
+.record-modal .customer-channel:hover:not(:disabled),.record-modal .customer-channel[aria-pressed=true]{background:#edf7f3;border-color:#4e9b86;box-shadow:0 0 0 2px #4e9b8610}
+.record-modal .customer-channel:disabled{background:#f0f3f4;opacity:.65;cursor:not-allowed}.record-modal #customer-channel-panel>.footnote{margin:10px 0;font-size:10px;color:#526e77}
+.record-messenger{border:1px solid #d8e6e2;border-radius:16px;overflow:hidden;background:white;margin-top:12px;box-shadow:0 5px 22px #173b4810}
+.record-messenger[aria-busy=true]{opacity:.65;pointer-events:none}.record-chat-head{display:flex;align-items:center;gap:11px;padding:15px 17px;background:#fff;border-bottom:1px solid #e4ece9}
+.record-chat-head .channel-symbol{width:43px;height:43px;border-radius:13px;background:#eaf5f0;color:#18765d}
+.record-chat-head>div{flex:1;min-width:0}.record-chat-head b{display:block;font-size:14px;overflow-wrap:anywhere}.record-chat-head small{display:block;font-size:10px;color:#70838c;margin-top:5px}
+.chat-icon-button{display:grid;place-items:center;border:1px solid #dce8e4;background:white;color:#416c69;border-radius:10px;width:34px;height:34px;cursor:pointer;flex-shrink:0}
+.chat-icon-button:hover{background:#eaf5ef}.chat-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 15px;border-bottom:1px solid #e6eeeb;flex-wrap:wrap;background:#fbfdfc}
+.reply-window{display:inline-flex;align-items:center;gap:5px;color:#22775d;background:#eaf6ed;padding:5px 8px;border-radius:7px;font-size:10px;font-weight:500;line-height:1.7}
+.reply-window.closed{color:#94621f;background:#fff4df}.chat-search{display:flex;align-items:center;gap:5px;margin:0;color:#7b8b90;max-width:180px}
+.chat-search input{padding:6px 8px;border:0;background:transparent;font-size:11px;min-width:0;outline-offset:2px}
+.unified-history,.messages{background-color:#f1f5f2;background-image:radial-gradient(#9ab4a01c .8px,transparent .8px);background-size:18px 18px}
+.record-chat-history.unified-history{height:clamp(210px,28vh,310px);min-height:210px;padding:18px 16px;gap:10px;overscroll-behavior:contain}
+.chat-date{align-self:center;width:100%;text-align:center;display:flex;justify-content:center;margin:7px 0 5px;clear:both}
+.chat-date span{display:inline-block;background:#e4ebe5e8;border:1px solid #dbe5de;border-radius:9px;padding:4px 11px;font-size:10px;color:#657d73}
+.unified-bubble,.bubble{box-shadow:0 1px 2px #123b3910;max-width:86%;padding:12px 14px;border:1px solid #e0e9e4;border-radius:14px 14px 3px 14px;background:white;color:#193c43;overflow-wrap:anywhere}
+.unified-bubble.out,.bubble.out{border-color:#cce7d8;background:#e1f2e7;color:#18483c;border-radius:14px 14px 14px 3px}
+.unified-bubble p{font-size:13px;line-height:1.95;margin:0 0 7px;white-space:pre-wrap}.unified-bubble footer{display:flex;align-items:center;justify-content:flex-end;gap:9px;flex-wrap:wrap;font-size:9px;color:#667e73}
+.message-status{font-size:9px}.message-status.is-read{color:#2479a0}.message-error{width:100%;color:#995346;font-size:9px}
+.unified-bubble.attention{border-color:#dcb7a8}.message-file{font-size:10px;color:#587666;padding:3px 0 8px;display:block}.message-attachment{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;margin:4px 0 10px;border:1px solid #d4e5db;border-radius:8px;color:#2b6a52;text-decoration:none;font-size:11px;background:#ffffff90}
+.chat-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:220px;padding:30px;color:#718981;text-align:center;line-height:1.9}
+.chat-empty>.brand-icon{color:#4c8b7b}.chat-empty b{font-size:14px;color:#34594f}.chat-empty span{font-size:11px;max-width:320px}
+.record-chat-compose{padding:15px;background:#fff;border-top:1px solid #dfe9e3}.compose-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 12px;flex-wrap:wrap}
+.compose-top b{display:flex;align-items:center;gap:6px;color:#1d5b4c;font-size:12px}.compose-top>span{font-size:9px;color:#72847c}
+.record-chat-compose textarea{font-size:13px;line-height:1.9;border:1px solid #d8e4df;background:#fafcfb;resize:vertical;min-height:86px;border-radius:12px}
+.record-chat-compose textarea:focus{outline:2px solid #87bbaa;outline-offset:1px}.record-chat-compose textarea:disabled{background:#f0f3f1;color:#83938b;cursor:not-allowed}
+.compose-bottom{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-top:11px}.compose-bottom>small{font-size:9px;line-height:1.8;color:#72857b;max-width:260px}
+.compose-bottom>.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;background:#147d66;border-color:#147d66;min-height:42px}
+.record-message-feedback{font-size:11px;line-height:1.8;color:#315f50;margin:8px 0 0}.record-message-feedback:empty{display:none}
+.record-student-choice{padding:10px 15px;background:#fff5e5;border-top:1px solid #eedcba}.record-student-choice label{margin:0;font-size:11px}.record-student-choice small{display:block;font-size:10px;color:#8a6a38;margin-top:7px}
+.chat-window-notice{color:#89632c;background:#fff7e8;padding:10px;border-radius:9px;font-size:11px;line-height:1.9;margin:0 0 10px}.template-preview{font-size:12px;line-height:1.9;white-space:pre-wrap;padding:12px;background:#f1f7f3;border:1px dashed #a6cbb6;border-radius:10px}
+.record-conversation .customer-followup{margin-top:18px;padding:18px;background:white;border:1px solid #e0e9e5;border-radius:15px}.record-conversation .customer-timeline{max-height:300px}
+.unified-inbox{box-shadow:0 7px 30px #133b3a08;border-radius:20px}.unified-thread{font-family:inherit;padding:16px}.unified-thread.active{background:#eaf4ee;box-shadow:inset -4px 0 #26836b}.unified-thread p{line-height:1.8;color:#6e8178}
+.unified-chat-head{background:white;padding:16px 20px}.chat-person-avatar{display:grid;place-items:center;background:#e8f4ed;color:#25836d;width:46px;height:46px;border-radius:15px;flex-shrink:0}.unified-chat-head>div:first-of-type{flex:1}.unified-chat-head h2{font-size:17px}.unified-chat-head .reply-window{margin-top:8px;display:table}
+#unified-composer{background:#fff;padding:16px 20px}#unified-composer textarea{background:#f8fbf9;min-height:80px;font-size:13px;line-height:1.9;border-radius:12px}.unified-history{height:460px}
+.record-modal button:focus-visible,.record-modal select:focus-visible,.record-modal input:focus-visible{outline:2px solid #27896b;outline-offset:3px}
+@media(min-width:1000px){.record-details{position:sticky;top:10px}}
+@media(max-width:1000px){.record-layout{grid-template-columns:minmax(230px,.7fr) minmax(0,1.3fr);gap:14px}.record-modal .modalbody{padding:15px}.record-details{padding:14px}}
+@media(max-width:760px){.record-modal{width:calc(100% - 16px);max-height:96dvh;border-radius:17px}.record-layout{display:flex;flex-direction:column;gap:16px}.record-details,.record-conversation{width:100%;box-sizing:border-box}.record-conversation{order:-1}.record-details .formgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.record-details .formgrid .full{grid-column:1/-1}.record-modal .modalhead{padding:15px 17px}.record-modal .modalhead h2{font-size:16px}.record-conversation>.customer-workspace{padding:0}.record-chat-history.unified-history{height:340px}.record-chat-head{padding:13px}.compose-bottom{align-items:flex-end}.compose-bottom>small{max-width:165px}.unified-chat-head .actions{width:100%}.unified-inbox{border-radius:15px}}
+@media(max-width:430px){.record-details .formgrid{grid-template-columns:1fr}.record-details .formgrid .full{grid-column:auto}.record-modal .modalbody{padding:11px}.record-modal .customer-channel{padding:9px;gap:7px}.record-modal .customer-channel small{font-size:9px}.record-chat-history.unified-history{height:310px;padding:13px 10px}.unified-bubble{max-width:92%;padding:10px 12px}.compose-bottom{flex-wrap:wrap}.compose-bottom>.btn{width:100%}.compose-bottom>small{max-width:none}.chat-toolbar{padding:9px 11px}.chat-search{max-width:145px}}
+@media(prefers-reduced-motion:reduce){.channel-tile{transition:none}.channel-tile:hover{transform:none}}

@@ -58,10 +58,10 @@ test('Original Mid East platform integration and access boundaries',async t=>{
       const result=await fetch(base+'/api/contacts',{method:'POST',headers:{'Content-Type':'application/json',Cookie:one.cookie,'X-CSRF-Token':one.csrf,Origin:'https://foreign.example'},body:JSON.stringify({name:'Denied'})});assert.equal(result.status,403);
     });
     await t.test('contact canonical number deduplication and ownership',async()=>{
-      const result=await request('/api/contacts','POST',{name:'Test student',phone:'+20 100 000 0001'},one);assert.equal(result.status,201);contact=result.body;
+      const result=await request('/api/contacts','POST',{name:'Test student',phone:'+20 100 000 0001',owner_id:accounts['Agent One'].id},admin);assert.equal(result.status,201);contact=result.body;
       assert.equal(contact.phone,'+201000000001');
-      assert.equal((await request('/api/contacts','POST',{name:'Duplicate',phone:'00201000000001'},two)).status,409);
-      assert.equal((await request('/api/contacts','POST',{name:'No country',phone:'01000000001'},one)).status,400);
+      assert.equal((await request('/api/contacts','POST',{name:'Duplicate',phone:'00201000000001',owner_id:accounts['Agent Two'].id},admin)).status,409);
+      assert.equal((await request('/api/contacts','POST',{name:'No country',phone:'01000000001'},admin)).status,400);
       assert.equal((await request('/api/contacts','POST',{name:'Wrong owner',owner_id:accounts['Agent Two'].id},one)).status,403);
       const other=await request('/api/data','GET',undefined,two);assert.equal(other.body.contacts.length,0);
       assert.equal((await request('/api/contacts/'+contact.id,'PATCH',{name:'Steal'},two)).status,404);
@@ -85,10 +85,11 @@ test('Original Mid East platform integration and access boundaries',async t=>{
     await t.test('ticket and attachment access follows customer assignment',async()=>{
       assert.equal((await request('/api/tickets','POST',{contact_id:contact.id,title:'Document question',description:'Test detail'},one)).status,201);
       const uploaded=await request('/api/contacts/'+contact.id+'/files','POST',{name:'sample.txt',mime:'text/plain',content:Buffer.from('synthetic sample').toString('base64')},one);assert.equal(uploaded.status,201);
-      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,two)).status,404);
+      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,two)).status,403);
       assert.equal((await request('/api/contacts/'+contact.id,'PATCH',{owner_id:accounts['Agent Two'].id},admin)).status,200);
-      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,one)).status,404);
-      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,two)).status,200);
+      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,one)).status,403);
+      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,two)).status,403);
+      assert.equal((await request('/api/files/'+uploaded.body.id,'GET',undefined,admin)).status,200);
       const data=await request('/api/data','GET',undefined,two);assert.equal(data.body.leads.length,1);assert.equal(data.body.tasks.length,1);assert.equal(data.body.tickets.length,1);
     });
     await t.test('agent cannot export, create staff or access financial records',async()=>{
