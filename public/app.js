@@ -1,6 +1,7 @@
 import {createMarketing} from './marketing.js';
 import {createWorkspace} from './workspace.js';
 import {brandIcon} from './brand-icons.js';
+import {createRecordMessenger} from './record-messenger.js';
 import {customerChannelButtons,customerTimeline,customerMailHistory} from './customer-panel.js';
 let customerWorkspaceState=null;
 import {countries} from './countries.js';
@@ -18,12 +19,13 @@ let hubState=null,selectedSocial=null,socialMessages=[];
 let studioEntity='contact',factorState=null,dragField=null;
 const workspace=createWorkspace({api,escape,modal,bindForm,toast,render,getUser:()=>user,getData:()=>data,getPage:()=>page,getSearch:()=>search,navigate:async target=>{page=target;search='';await load();}});
 const marketing=createMarketing({api,escape,modal,bindForm,toast,render,getUser:()=>user,getData:()=>data,getPage:()=>page,getSearch:()=>search,navigate:async target=>{page=target;search='';await load();}});
+const recordMessenger=createRecordMessenger({api,getUser:()=>user,toast,getTemplates:()=>data?.templates||[],onUpdate:async id=>{const w=await api('/contacts/'+id+'/workspace');const timeline=$('#customer-timeline-panel');if(timeline)timeline.innerHTML='<div class="actions"><button type="button" class="linkbutton" data-action="customer-refresh" data-id="'+id+'">تحديث سجل المتابعة</button></div>'+customerMailHistory(w)+customerTimeline(w);}});
 const isManager = () => ['admin','manager'].includes(user?.role);
 const canFinance = () => ['admin','manager','accountant'].includes(user?.role);
 const getContact = id => data.contacts.find(c=>c.id===id);
 const personName = id => data.users.find(u=>u.id===id)?.name || 'موظف مختص';
 const filtered = list => list.filter(r=>!search || Object.values(r).some(v=>typeof v==='string'&&v.toLowerCase().includes(search.toLowerCase())));
-function toast(message,error=false){const el=$('#toast');el.textContent=message;el.className='show'+(error?' error':'');setTimeout(()=>el.className='',5000);}
+function toast(message,error=false){const el=typeof document==='undefined'?null:$('#toast');if(!el)return;el.textContent=message;el.className='show'+(error?' error':'');setTimeout(()=>el.className='',5000);}
 async function api(path,method='GET',body){
   const result=await fetch('/api'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
   const value=await result.json();if(!result.ok){if(result.status===401&&path!=='/login'){user=null;login();}throw new Error(value.error || 'تعذر تنفيذ العملية');}return value;
@@ -51,11 +53,13 @@ function customInputs(entity,values={}){
 }
 function customValues(form,entity){const result={};for(const field of fieldsFor(entity)){const control=form.elements['custom_'+field.field_key];if(!control)continue;if(field.type==='boolean')result[field.field_key]=control.checked;else if(control.value!=='')result[field.field_key]=field.type==='number'?Number(control.value):control.value;}if(data.apps.find(a=>a.id===entity)?.app_key==='me_students'&&result.nationality){const country=countries.find(c=>c.name===result.nationality);if(country)result.nationality_code=country.code;}return result;}
 function modal(title,body,submitLabel='حفظ'){
+  $('#modal').className='';
   $('#modal').innerHTML=`<div class="modalhead"><h2>${title}</h2><button class="close" type="button" data-close>×</button></div><div class="modalbody"><form id="editor">${body}<div class="formerror" id="modalerror"></div><div class="modalfoot"><button class="btn primary" type="submit">${submitLabel}</button><button class="btn" type="button" data-close>إلغاء</button></div></form></div>`;
   $('#modal').showModal();return $('#editor');
 }
 function bindForm(form,handler){form.addEventListener('submit',async event=>{event.preventDefault();const btn=form.querySelector('[type=submit]');btn.disabled=true;try{await handler(new FormData(form),form);if(!user)return;$('#modal').close();await load();toast('تم الحفظ');}catch(error){if($('#modalerror'))$('#modalerror').textContent=error.message;else toast(error.message,true);}finally{btn.disabled=false;}});}
 function login(){
+  recordMessenger.reset();
   clearInterval(refreshTimer);$('#app').innerHTML=`<main class="login"><div class="loginart"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><h1>كل محادثة،<br>فرصة لبداية جديدة.</h1><p>مساحة واحدة لفريقك، من أول رسالة إلى إتمام الخدمة ومتابعة العميل.</p><div class="badge">الإصدار 0.9</div></div><div class="loginform"><form id="loginform"><h2>أهلًا برجوعك</h2><p class="sub">ادخل حسابك لفتح مساحة عمل ميد إيست.</p><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" required autocomplete="username"><label>كلمة المرور</label><input name="password" type="password" dir="ltr" required autocomplete="current-password"><label>رمز تطبيق المصادقة — لو مفعل</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"><div class="formerror" id="loginerror"></div><button class="btn primary" type="submit">دخول مساحة العمل ←</button><p class="footnote">حساب المدير يُنشأ عند تجهيز السيرفر. لو نسيت كلمة المرور تواصل مع مالك النظام.</p></form></div></main>`;
   $('#loginform').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;try{const result=await api('/login','POST',Object.fromEntries(new FormData(form)));user=result.user;csrf=result.csrf;page=user.role==='accountant'?'finance':'dashboard';await load();startRefresh();}catch(error){$('#loginerror').textContent=error.message;}finally{btn.disabled=false;}});
 }
@@ -100,17 +104,18 @@ function taskRow(t){return `<div class="taskrow ${t.status==='done'?'done':''}">
 async function showContact(id){
   const current=id?getContact(id):null,visible=isManager();
   const details=visible?`<div><label>دولة رقم الهاتف</label><select name="phone_country">${countries.filter(c=>c.dial).map(c=>`<option value="${c.code}" ${c.code==='EG'?'selected':''}>${escape(c.name)} (${c.dial})</option>`).join('')}</select></div><div><label>رقم الهاتف</label><input name="phone" dir="ltr" placeholder="رقم محلي أو + كود الدولة" value="${escape(current?.phone||'')}"></div><div><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" value="${escape(current?.email||'')}"></div>`:`<div class="full customer-privacy">${brandIcon('shield',22)}<span>بيانات الاتصال محمية للإدارة. يمكنك التواصل من أزرار العميل دون رؤية الرقم أو البريد. إضافة بيانات الاتصال وتعديلها للإدارة.</span></div>`;
-  const form=modal(current?'ملف العميل والمتابعة':'إضافة عميل',`<div class="formgrid"><div><label>اسم العميل *</label><input name="name" required value="${escape(current?.name||'')}"></div>${details}${visible?`<div><label>الموظف المسؤول</label><select name="owner_id">${data.users.filter(u=>u.active&&u.role!=='accountant').map(u=>`<option value="${u.id}" ${(current?.owner_id||user.id)===u.id?'selected':''}>${escape(u.name)}</option>`).join('')}</select></div>`:''}${customInputs('contact',current?JSON.parse(current.custom):{})}</div>${current?'<section class="customer-workspace"><h3>التواصل من ملف العميل</h3><div id="customer-channel-panel">جارٍ تحميل القنوات…</div></section><section class="files"><b>المستندات</b><div id="filelist">جارٍ التحميل…</div><label>إرفاق ملف (بحد أقصى 10 ميجابايت)</label><input type="file" id="uploadfile"><button type="button" class="btn small" data-action="upload" data-id="'+current.id+'">رفع الملف</button><p class="footnote">الأصول متاحة للإدارة لحماية بيانات الاتصال داخل الصور والإيصالات. فحص البرمجيات الضارة غير مفعل في هذا الإصدار.</p></section>':''}`);
+  const form=modal(current?'ملف العميل والمتابعة':'إضافة عميل',`<div class="formgrid"><div><label>اسم العميل *</label><input name="name" required value="${escape(current?.name||'')}"></div>${details}${visible?`<div><label>الموظف المسؤول</label><select name="owner_id">${data.users.filter(u=>u.active&&u.role!=='accountant').map(u=>`<option value="${u.id}" ${(current?.owner_id||user.id)===u.id?'selected':''}>${escape(u.name)}</option>`).join('')}</select></div>`:''}${customInputs('contact',current?JSON.parse(current.custom):{})}</div>${current?'<section class="customer-workspace"><h3>التواصل من ملف العميل</h3><div id="customer-channel-panel">جارٍ تحميل القنوات…</div><div id="record-messenger" class="record-messenger"></div></section><section class="files"><b>المستندات</b><div id="filelist">جارٍ التحميل…</div><label>إرفاق ملف (بحد أقصى 10 ميجابايت)</label><input type="file" id="uploadfile"><button type="button" class="btn small" data-action="upload" data-id="'+current.id+'">رفع الملف</button><p class="footnote">الأصول متاحة للإدارة لحماية بيانات الاتصال داخل الصور والإيصالات. فحص البرمجيات الضارة غير مفعل في هذا الإصدار.</p></section>':''}`);
   bindForm(form,async(values,el)=>{const payload={...Object.fromEntries(values),custom:customValues(el,'contact')};await api(id?'/contacts/'+id:'/contacts',id?'PATCH':'POST',payload);});
   if(current){
     await api('/contacts/'+current.id+'/viewed','POST',{});await loadFiles(current.id);
-    const block=document.createElement('section');block.className='customer-followup';block.innerHTML='<h3>سجل المتابعة</h3><label for="note-body">ملاحظة داخلية للفريق</label><textarea id="note-body" rows="3" maxlength="4000" placeholder="ما الذي تم؟ وما خطوة المتابعة التالية؟"></textarea><button class="btn small" type="button" data-action="add-note" data-id="'+current.id+'">حفظ الملاحظة باسمك ووقتها</button><div id="customer-timeline-panel"></div><label><input type="checkbox" id="wa-consent" '+(current.whatsapp_opt_in?'checked':'')+'> موافقة العميل على بدء التواصل عبر واتساب</label><button class="btn small" type="button" data-action="save-consent" data-id="'+current.id+'">حفظ حالة الموافقة</button>';form.querySelector('.modalfoot').before(block);await loadCustomerWorkspace(current.id);
+    const block=document.createElement('section');block.className='customer-followup';block.innerHTML='<h3>سجل المتابعة</h3><label for="note-body">ملاحظة داخلية للفريق</label><textarea id="note-body" rows="3" maxlength="4000" placeholder="ما الذي تم؟ وما خطوة المتابعة التالية؟"></textarea><button class="btn small" type="button" data-action="add-note" data-id="'+current.id+'">حفظ الملاحظة باسمك ووقتها</button><div id="customer-timeline-panel"></div><label><input type="checkbox" id="wa-consent" '+(current.whatsapp_opt_in?'checked':'')+'> موافقة العميل على بدء التواصل عبر واتساب</label><button class="btn small" type="button" data-action="save-consent" data-id="'+current.id+'">حفظ حالة الموافقة</button>';form.querySelector('.modalfoot').before(block);arrangeRecord(form);await loadCustomerWorkspace(current.id);
   }
 }
 async function loadFiles(id){const files=await api('/contacts/'+id+'/files'),el=$('#filelist');if(el)el.innerHTML=files.map(f=>`<div class="fileline">${isManager()?`<a href="/api/files/${f.id}">${escape(f.name)}</a>`:`<span>${brandIcon('document',18)} ${escape(f.name)} · الأصل للإدارة</span>`}<span class="muted">${Math.ceil(f.size/1024)} KB</span></div>`).join('')||'<p class="sub">لا توجد ملفات بعد</p>';}
 async function loadCustomerWorkspace(id){
   customerWorkspaceState=await api('/contacts/'+id+'/workspace');const channel=$('#customer-channel-panel'),timeline=$('#customer-timeline-panel');
   if(channel)channel.innerHTML=customerChannelButtons(customerWorkspaceState)+(user.role==='admin'?'<button type="button" class="linkbutton" data-action="customer-mail-settings">إعداد واختبار بريد الشركة</button>':'');
+  const messenger=$('#record-messenger');if(messenger)recordMessenger.mount(messenger,customerWorkspaceState);
   if(timeline)timeline.innerHTML='<div class="actions"><button type="button" class="linkbutton" data-action="customer-refresh" data-id="'+id+'">تحديث سجل المتابعة</button></div>'+customerMailHistory(customerWorkspaceState)+customerTimeline(customerWorkspaceState);
 }
 async function openCustomerChannel(id,index){
@@ -119,7 +124,7 @@ async function openCustomerChannel(id,index){
     const name=customerWorkspaceState.contact.name,requestKey=crypto.randomUUID();const form=modal('بريد إلى '+name,'<p class="customer-privacy">سيحدد الخادم بريد العميل المسجل. لا تُدخل عنوانًا أو تنسخ بيانات اتصال.</p><label>عنوان الرسالة</label><input name="subject" required maxlength="200"><label>نص الرسالة</label><textarea name="body" required rows="7" maxlength="12000"></textarea><p class="footnote">تُحفظ الرسالة باسم الموظف وحالتها في ملف العميل. قبول مزود البريد لا يثبت القراءة.</p>','تجهيز البريد للإرسال');
     bindForm(form,async values=>{await api('/contacts/'+id+'/send-email','POST',{subject:values.get('subject'),body:values.get('body'),request_key:requestKey});});return;
   }
-  const result=await api('/contacts/'+id+'/open-channel','POST',{channel:c.channel,account_id:c.account_id});$('#modal').close();page='communications';search='';await load();await workspace.action('workspace-thread',result.key);
+  await recordMessenger.open(c);
 }
 async function showCustomerMailSettings(){
   const s=await api('/customer-mail/settings'),names={'smtp.gmail.com':'Gmail','smtp.office365.com':'Microsoft 365','smtp-mail.outlook.com':'Outlook','smtp.zoho.com':'Zoho','smtp.zoho.eu':'Zoho Europe','smtp-relay.brevo.com':'Brevo'};
@@ -127,21 +132,34 @@ async function showCustomerMailSettings(){
   bindForm(form,async values=>{await api('/customer-mail/settings','PATCH',{...Object.fromEntries(values),port:Number(values.get('port'))});await api('/customer-mail/verify','POST',{});});
 }
 
-function showLead(id){
+async function showLead(id){
   const current=id?data.leads.find(l=>l.id===id):null;
   const form=modal(current?'تفاصيل الفرصة':'فرصة بيع جديدة',`${current?'<button type="button" class="btn" data-action="edit-contact" data-id="'+current.contact_id+'">ملف العميل والتواصل وسجل المتابعة</button>':''}<div class="formgrid"><div class="full"><label>عنوان الفرصة *</label><input name="title" value="${escape(current?.title||'')}" required></div>${!current?`<div><label>العميل *</label><select name="contact_id" required>${contactOptions()}</select></div><div><label>القيمة بالجنيه المصري</label><input name="value" type="number" step="0.01" min="0" value="0"></div>`:''}${customInputs('lead',current?JSON.parse(current.custom):{})}</div>`);
   bindForm(form,async(values,el)=>{const body={...Object.fromEntries(values),custom:customValues(el,'lead')};if(!current)body.value_minor=Math.round(Number(values.get('value'))*100);delete body.value;await api(current?'/leads/'+id:'/leads',current?'PATCH':'POST',body);});
+  if(current){
+   const section=document.createElement('section');section.className='customer-workspace';section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
+   const followup=document.createElement('section');followup.className='customer-followup';followup.innerHTML='<h3>ملاحظات الفريق والمتابعة</h3><label for="note-body">ملاحظة داخلية — لا تُرسل للعميل</label><textarea id="note-body" rows="3" maxlength="4000" placeholder="آخر إجراء وخطوة المتابعة التالية"></textarea><button type="button" class="btn small" data-action="add-note" data-id="'+current.contact_id+'">حفظ الملاحظة</button><div id="customer-timeline-panel"></div>';
+   form.querySelector('.modalfoot').before(section,followup);arrangeRecord(form);await loadCustomerWorkspace(current.contact_id);
+  }
+}
+function arrangeRecord(form){
+ $('#modal').classList.add('record-modal');
+ const layout=document.createElement('div');layout.className='record-layout';
+ const details=document.createElement('section');details.className='record-details';details.setAttribute('aria-label','بيانات الملف');
+ const side=document.createElement('section');side.className='record-conversation';side.setAttribute('aria-label','التواصل والمتابعة');
+ const fields=form.querySelector('.formgrid'),files=form.querySelector('.files'),chat=form.querySelector('.customer-workspace'),followup=form.querySelector('.customer-followup');
+ if(fields)details.append(fields);if(files)details.append(files);if(chat)side.append(chat);if(followup)side.append(followup);layout.append(details,side);form.prepend(layout);
 }
 async function action(name,id){
   if(await marketing.action(name,id))return;
   if(await workspace.action(name,id))return;
   if(await advancedAction(name,id))return;
-  if(name==='logout'){await api('/logout','POST',{});user=null;login();return;}
+  if(name==='logout'){recordMessenger.reset();await api('/logout','POST',{});user=null;login();return;}
   if(name==='customer-refresh'){await loadCustomerWorkspace(id);return;}
   if(name==='customer-channel'){const parts=id.split('|');await openCustomerChannel(parts[0],Number(parts[1]));return;}
   if(name==='customer-mail-settings'){await showCustomerMailSettings();return;}
   if(name==='contact'||name==='edit-contact'){await showContact(id);return;}
-  if(name==='lead'||name==='edit-lead'){if(!data.contacts.length){toast('أضف عميلًا أولًا',true);return;}showLead(id);return;}
+  if(name==='lead'||name==='edit-lead'){if(!data.contacts.length){toast('أضف عميلًا أولًا',true);return;}await showLead(id);return;}
   if(name==='task'){
     const form=modal('مهمة متابعة',`<label>عنوان المهمة *</label><input name="title" required><div class="formgrid"><div><label>العميل</label><select name="contact_id">${contactOptions(true)}</select></div><div><label>الموعد</label><input name="due_at" type="datetime-local"></div></div>`);
     bindForm(form,async(values)=>api('/tasks','POST',Object.fromEntries(values)));return;
