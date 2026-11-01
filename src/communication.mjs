@@ -4,7 +4,7 @@ import {queueMessage,accountWindow} from './whatsapp.mjs';
 import {socialThread,queueSocialReply} from './social.mjs';
 import {accountLimits,accountSummary,saveExtraAccount,verifyExtraAccount,resolveWhatsAppConfig} from './accounts.mjs';
 import {saveProfile} from './profiles.mjs';
-import {findStudents,studentDossier,threadStudents,linkThreadStudent,openStudentWhatsApp,classifyDocument,attachStudentDocument} from './student-files.mjs';
+import {findStudents,studentDossier,threadStudents,linkThreadStudent,openStudentWhatsApp,classifyDocument,attachStudentDocument,uploadStudentDocument} from './student-files.mjs';
 
 export function communicationThread(db,user,key,base,secretKey){
  if(user.role==='accountant')fail(403,'مركز التواصل لفريق العملاء');
@@ -50,6 +50,8 @@ export async function handleCommunication(ctx){
  const send=(status,value)=>{sendJson(res,status,value);return true;};
  if(path==='/api/communication'&&method==='GET')return send(200,communicationData(db,user,config,origin));
  if(path==='/api/communication/students/search'&&method==='POST'){const input=await jsonBody(req);return send(200,findStudents(db,user,String(input.query||'')));}
+ const upload=path.match(/^\/api\/communication\/students\/([^/]+)\/documents$/);
+ if(upload&&method==='POST')return send(201,uploadStudentDocument(db,user,upload[1],await jsonBody(req,14*1024*1024)));
  const dossier=path.match(/^\/api\/communication\/students\/([^/]+)$/);
  if(dossier&&method==='GET')return send(200,studentDossier(db,user,dossier[1]));
  if(path==='/api/communication/student-conversations'&&method==='POST'){const input=await jsonBody(req);return send(201,openStudentWhatsApp(db,user,input.student_id,String(input.phone_id||''),accountSummary(db,config,origin)));}

@@ -120,7 +120,7 @@ export function receiptByToken(db,value){
 }
 export function listRegistrations(db,user){
   if(user.role==='accountant')fail(403,'سجل التسجيلات لفريق العملاء');
-  return db.prepare('SELECT r.id,r.reference,r.contact_id,r.lead_id,r.student_id,r.admission_id,r.source,r.campaign,r.file_id,r.delivery_status,r.delivery_reason,r.created_at,json_extract(a.data,?) AS requested_service,c.name,c.phone,c.owner_id,m.status AS message_status FROM intake_registrations r JOIN contacts c ON c.id=r.contact_id JOIN app_records a ON a.id=r.admission_id LEFT JOIN messages m ON m.id=r.message_id'+(manager(user)?'':' WHERE c.owner_id=?')+' ORDER BY r.created_at DESC LIMIT 500').all('$.requested_service',...(manager(user)?[]:[user.id]));
+  return db.prepare('SELECT r.id,r.reference,r.contact_id,r.lead_id,r.student_id,r.admission_id,r.source,r.campaign,r.file_id,r.delivery_status,r.delivery_reason,r.created_at,json_extract(a.data,?) AS requested_service,s.name AS student_name,c.name,c.phone,c.owner_id,m.status AS message_status FROM intake_registrations r JOIN contacts c ON c.id=r.contact_id JOIN app_records a ON a.id=r.admission_id JOIN app_records s ON s.id=r.student_id LEFT JOIN messages m ON m.id=r.message_id'+(manager(user)?'':' WHERE c.owner_id=?')+' ORDER BY r.created_at DESC LIMIT 500').all('$.requested_service',...(manager(user)?[]:[user.id]));
 }
 export function registrationFiles(db,user,id){
   if(user.role==='accountant')fail(403,'الملفات لفريق العملاء');

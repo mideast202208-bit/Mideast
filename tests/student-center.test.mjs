@@ -58,7 +58,7 @@ test('WhatsApp attachments can be indexed once on the selected student and never
 test('public tour and international form load static assets without exposing private communication data',async()=>{
  const {db,key,admin,base}=fixture(),app=createApp({db,secretKey:key,env:{META_PHONE_NUMBER_ID:base.phoneId,META_INTAKE_USER_ID:admin.id}});await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));const root='http://127.0.0.1:'+app.server.address().port;
  try{
-  for(const path of ['/tour','/tour.js','/countries.js','/documents.js','/phone-lib.js','/apply']){const r=await fetch(root+path);assert.equal(r.status,200,path);const body=await r.text();assert.ok(body.length>100);if(path==='/tour')assert.match(body,/بيانات افتراضية/);if(path==='/apply'){assert.match(body,/name="phone_country"/);assert.match(body,/upload-document-type/);}}
+  for(const path of ['/tour','/tour.js','/countries.js','/documents.js','/student-records.js','/student-records.css','/phone-lib.js','/apply']){const r=await fetch(root+path);assert.equal(r.status,200,path);const body=await r.text();assert.ok(body.length>100);if(path==='/tour')assert.match(body,/بيانات افتراضية/);if(path==='/apply'){assert.match(body,/name="phone_country"/);assert.match(body,/upload-document-type/);}}
   for(const path of ['/api/communication','/api/communication/students/demo','/api/communication/threads/whatsapp%3Ademo%3A1000/students'])assert.equal((await fetch(root+path)).status,401);
  }finally{await new Promise(resolve=>app.server.close(resolve));db.close();}
 });
