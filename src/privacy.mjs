@@ -1,4 +1,4 @@
-import {findPhoneNumbersInText} from 'libphonenumber-js';
+import {findPhoneNumbersInText,parsePhoneNumberFromString} from 'libphonenumber-js';
 // Customer contact details stay available to transports, never to a staff browser.
 // This is a response projection, not a mutation of stored records or messages.
 export const canViewContactDetails = user => ['admin','manager'].includes(user?.role);
@@ -26,14 +26,24 @@ const privateLinkKey = key => /^(?:receipt_url|receipt_token|receipt_cipher|rece
 const opaqueKey = key => /^(?:id|csrf|hash|token|signature|uri|provider_id|media_id|account_key|thread_key|key|[a-z_]+_id)$/i.test(key);
 const fileReference = value => /^(?:ME-\d{4}-[A-F0-9]{10}|ST-[A-F0-9]{12})$/.test(value);
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
+function phoneForms(value){
+  const raw=digits(value||''),forms=[raw.replace(/\D/g,'')];
+  // The stored country code determines local/trunk forms. The generic Egyptian
+  // text parser alone cannot recognize a customer's UK/Iran/etc. local number.
+  const parsed=parsePhoneNumberFromString(raw);
+  if(parsed){const international=parsed.number.replace(/\D/g,'');forms.push(international,'00'+international,parsed.nationalNumber,parsed.formatNational().replace(/\D/g,''));}
+  return [...new Set(forms.filter(n=>n.length>=7))];
+}
 
 export function customerTextRedactor(db){
   // Include every customer's known values: notes can mention a different customer.
   const rows=db.prepare("SELECT phone,email FROM contacts WHERE phone IS NOT NULL OR email<>''").all();
-  const phones=[...new Set(rows.map(r=>digits(r.phone||'').replace(/\D/g,'')).filter(n=>n.length>=7))];
+  // Longest first prevents a shorter national suffix leaving a country/trunk
+  // prefix behind when redacting the international representation.
+  const phones=[...new Set(rows.flatMap(r=>phoneForms(r.phone)))].sort((a,b)=>b.length-a.length);
   const emails=[...new Set(rows.map(r=>(r.email||'').trim()).filter(Boolean))];
   const digitPattern=n=>n.split('').map(d=>'['+d+'٠١٢٣٤٥٦٧٨٩'[Number(d)]+'۰۱۲۳۴۵۶۷۸۹'[Number(d)]+']').join('[\\s().\\-]*');
-  const knownPhones=phones.map(n=>new RegExp('\\+?'+digitPattern(n),'g'));
+  const knownPhones=phones.map(n=>new RegExp('(?:\\+[\\s().\\-]*)?'+digitPattern(n),'g'));
   const knownEmails=emails.map(e=>new RegExp(escapeRE(e),'gi'));
   return value=>{
     let result=String(value);
@@ -55,7 +65,7 @@ export function customerTextRedactor(db){
 export function projectCustomerResponse(db,user,value){
   if(!user||canViewContactDetails(user))return value;
   const redact=customerTextRedactor(db);
-  const knownNumbers=new Set(db.prepare('SELECT phone FROM contacts WHERE phone IS NOT NULL').all().map(r=>digits(r.phone).replace(/\D/g,'')));
+  const knownNumbers=new Set(db.prepare('SELECT phone FROM contacts WHERE phone IS NOT NULL').all().flatMap(r=>phoneForms(r.phone)));
   const walk=(item,key='',depth=0,stored=false)=>{
     if(depth>40)return null;
     if(item===null||item===undefined)return item;

@@ -16,8 +16,11 @@ function mailSettingsSummary(db,user,key){
 }
 function saveMailSettings(db,user,input,key){
  if(user.role!=='admin')fail(403,'إعداد بريد الشركة للمالك');const old=mailConfig(db,key)||{};
- const c={host:String(input.host||old.host||'').trim().toLowerCase(),port:Number(input.port||old.port||465),user:text(input.user??old.user??'','حساب البريد',254),from:text(input.from??old.from??'','بريد الإرسال',254).toLowerCase(),pass:input.password?text(input.password,'كلمة مرور التطبيق',500):old.pass,verified_at:null};
- if(!smtpHosts.has(c.host)||![465,587].includes(c.port)||!address(c.from)||!c.pass||/[\r\n]/.test(c.user))fail(400,'اختر خادم بريد مدعومًا وبريد إرسال وكلمة مرور تطبيق صالحة');
+ const c={host:String(input.host||old.host||'').trim().toLowerCase(),port:Number(input.port||old.port||465),user:text(input.user??old.user??'','حساب البريد',254),from:text(input.from??old.from??'','بريد الإرسال',254).toLowerCase(),verified_at:null};
+ // An address can be saved as a disabled draft. Never reuse another account's password.
+ const sameAccount=c.host===old.host&&c.user===old.user;
+ c.pass=input.password?text(input.password,'كلمة مرور التطبيق',500):(sameAccount?old.pass:undefined);
+ if(!smtpHosts.has(c.host)||![465,587].includes(c.port)||!address(c.from)||/[\r\n]/.test(c.user))fail(400,'اختر خادم بريد مدعومًا وحسابًا وبريد إرسال صالحين');
  db.prepare("INSERT INTO settings VALUES('email.smtp',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(encryptSecret(JSON.stringify(c),key));audit(db,user,'configured','email','company',{verified:false});return mailSettingsSummary(db,user,key);
 }
 export function recoverCustomerEmailJobs(db){db.prepare("UPDATE customer_email_jobs SET status='unknown',error_code='RESTART_DURING_SEND',updated_at=? WHERE status='sending'").run(now());}
@@ -95,7 +98,7 @@ export async function handleCustomerWorkspace(ctx){
   if(method==='PATCH')return send(200,saveMailSettings(db,user,await jsonBody(req),secretKey));
  }
  if(path==='/api/customer-mail/verify'&&method==='POST'){
-  if(user.role!=='admin')fail(403,'اختبار بريد الشركة للمالك');const c=mailConfig(db,secretKey);if(!c)fail(409,'أضف إعدادات بريد الشركة أولًا');const smtp=makeTransport(c,smtpTransportFactory);
+  if(user.role!=='admin')fail(403,'اختبار بريد الشركة للمالك');const c=mailConfig(db,secretKey);if(!c?.pass)fail(409,'أضف كلمة مرور تطبيق بريد الشركة قبل اختبار الاتصال؛ الإرسال غير مفعّل');const smtp=makeTransport(c,smtpTransportFactory);
   try{await smtp.verify();c.verified_at=now();db.prepare("UPDATE settings SET value=? WHERE key='email.smtp'").run(encryptSecret(JSON.stringify(c),secretKey));audit(db,user,'verified','email','company');return send(200,{verified:true});}catch{fail(502,'تعذر التحقق من بريد الشركة؛ راجع كلمة مرور التطبيق وإعدادات المزود');}finally{smtp.close?.();}
  }
  const match=path.match(/^\/api\/contacts\/([^/]+)\/(workspace|open-channel|send-email|viewed)$/);if(!match)return false;

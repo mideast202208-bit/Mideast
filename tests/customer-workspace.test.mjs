@@ -76,6 +76,17 @@ test('notes, record updates, sends and viewing have a scoped author/time timelin
 test('migration 9 is additive and does not rewrite existing customer contact values',async()=>{
  const f=await fixture();try{assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);assert.equal(f.db.prepare('SELECT phone FROM contacts WHERE id=?').get(f.c.id).phone,f.c.phone);assert.equal(f.db.prepare('PRAGMA quick_check').get().quick_check,'ok');assert.equal(f.db.prepare('PRAGMA foreign_key_check').all().length,0);}finally{await f.close();}
 });
+test('company email identity can be saved as a disabled draft; credentials never carry to a different mailbox',async()=>{
+ const f=await fixture();try{
+  const draft=await f.request('owner','/customer-mail/settings','PATCH',{host:'smtp.gmail.com',port:465,user:'Company.Sender@example.invalid',from:'Company.Sender@example.invalid'});
+  assert.equal(draft.status,200);assert.equal(draft.data.user,'Company.Sender@example.invalid');assert.equal(draft.data.from,'company.sender@example.invalid');assert.equal(draft.data.configured,false);assert.equal(draft.data.password_set,false);
+  assert.equal((await f.request('owner','/customer-mail/verify','POST',{})).status,409);assert.equal(f.mailOptions.length,0);
+  assert.equal((await f.request('agent','/contacts/'+f.c.id+'/send-email','POST',message)).status,409);
+  await f.configure();assert.equal((await f.request('owner','/customer-mail/settings')).data.password_set,true);
+  const changed=await f.request('owner','/customer-mail/settings','PATCH',{user:'other@example.invalid',from:'other@example.invalid'});assert.equal(changed.status,200);assert.equal(changed.data.password_set,false);assert.equal(changed.data.configured,false);
+  assert.equal((await f.request('owner','/customer-mail/verify','POST',{})).status,409);
+ }finally{await f.close();}
+});
 test('registration audit appears in the customer timeline and disabled social accounts remain visible as unavailable',async()=>{
  const f=await fixture();try{
   installEducationWorkspace(f.db,f.users.owner);createRegistration(f.db,{name:'Synthetic registered student',phone:f.c.phone,certificate:'ثانوي سوداني',academic_year:'2026',university:'Synthetic University',faculty:'Synthetic Faculty',source:'website',consent:true,whatsapp_opt_in:false,request_key:'synthetic-registration-123456'},f.key,'https://crm.example.test');

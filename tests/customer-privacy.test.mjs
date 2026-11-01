@@ -9,7 +9,7 @@ import {installEducationWorkspace} from '../src/education.mjs';
 import {createRegistration} from '../src/intake.mjs';
 import {queueMessage,sendNext} from '../src/whatsapp.mjs';
 import {queueSocialReply,sendSocialNext} from '../src/social.mjs';
-import {projectCustomerResponse} from '../src/privacy.mjs';
+import {projectCustomerResponse,customerTextRedactor} from '../src/privacy.mjs';
 
 const phone='+201000000077',email='private.student@example.test';
 async function fixture(){
@@ -44,6 +44,32 @@ async function fixture(){
 function noContactData(result){
  for(const value of [phone,phone.slice(1),phone.slice(-8),email,'+201000000088','foreign.customer@example.test','7946 0000','/receipt/'])assert.ok(!result.raw.includes(value),'staff response exposed synthetic private marker: '+value);
 }
+
+test('stored UK, US, Iran and Saudi contact numbers are hidden in local and international Arabic/Persian formatted free text',async()=>{
+ const f=await fixture();try{
+  const examples=[
+   {international:'+442079460000',national:'2079460000',local:'02079460000'},
+   {international:'+12025550123',national:'2025550123',local:'2025550123'},
+   {international:'+989123456789',national:'9123456789',local:'09123456789'},
+   {international:'+966512345678',national:'512345678',local:'0512345678'},
+  ];
+  for(const [i,item] of examples.entries())createContact(f.db,f.users.admin,{name:'Synthetic international '+i,phone:item.international,owner_id:f.users.agent.id});
+  const redact=customerTextRedactor(f.db);
+  for(const item of examples){
+   const variants=new Set([item.local,item.national,item.international,item.international.slice(1),'00'+item.international.slice(1)]);
+   for(const value of variants){
+    for(const spaced of [value,value.split('').join(' '),value.split('').join('-'),value.split('').join('.')])for(const alphabet of ['0123456789','٠١٢٣٤٥٦٧٨٩','۰۱۲۳۴۵۶۷۸۹']){
+     const form=spaced.replace(/\d/g,n=>alphabet[Number(n)]),safe=redact('اتصال: '+form+' نهاية');assert.equal(safe,'اتصال: [بيانات اتصال محجوبة] نهاية');
+     const projected=projectCustomerResponse(f.db,f.users.agent,{body:form,custom:JSON.stringify({note:form})});assert.equal(projected.body,'[بيانات اتصال محجوبة]');assert.equal(JSON.parse(projected.custom).note,'[بيانات اتصال محجوبة]');
+    }
+   }
+   const protectedValues={id:item.local,account_id:Number(item.national),csrf:'0123456789abcdef'.repeat(4),reference:'ME-2026-2010000077',file:'ST-123456789012'};
+   const safe=projectCustomerResponse(f.db,f.users.agent,protectedValues);for(const [k,v] of Object.entries(protectedValues))assert.equal(safe[k],v);
+   assert.equal(projectCustomerResponse(f.db,f.users.manager,{body:item.local}).body,item.local);
+  }
+  assert.equal(f.calls.length,0);
+ }finally{await f.close();}
+});
 
 test('staff projections cover bulk, threads, dossiers, notes, nested studio JSON and file names; managers retain details',async t=>{
  const f=await fixture();try{
