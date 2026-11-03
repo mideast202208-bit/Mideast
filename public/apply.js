@@ -47,13 +47,14 @@ if(initialParams.get('embed')==='1'){
   }
 }
 function showStep(index){
+  if(index<0||index>=steps.length)return;
   current=index;steps.forEach((step,i)=>{step.hidden=i!==index;});
-  document.querySelector('#step-label').textContent='الخطوة '+(index+1)+' من 4';
-  document.querySelector('#step-progress').style.width=((index+1)*25)+'%';
+  document.querySelector('#step-label').textContent='الخطوة '+(index+1)+' من '+steps.length;
+  document.querySelector('#step-progress').style.width=((index+1)/steps.length*100)+'%';
   document.querySelector('#previous-step').hidden=index===0;
-  document.querySelector('#next-step').hidden=index===3;
-  document.querySelector('#send-application').hidden=index!==3;error.textContent='';
-  if(index===3){
+  document.querySelector('#next-step').hidden=index===steps.length-1;
+  document.querySelector('#send-application').hidden=index!==steps.length-1;error.textContent='';
+  if(index===steps.length-1){
     const target=document.querySelector('#review-data');target.replaceChildren();
     for(const [label,value] of [['الخدمة',serviceSelect.value||'طلب دراسة أو استشارة عامة'],['الطالب',form.elements.name.value],['رقم التواصل',document.querySelector('#phone-preview').textContent||form.elements.phone.value],['الجنسية',countries.find(c=>c.code===form.elements.nationality_code.value)?.name||''],['الدراسة',form.elements.level.value+' · '+form.elements.certificate.value],['سنة التقديم',form.elements.academic_year.value],['المرفقات',String(selectedFiles.length)+' ملف']]){
       const row=document.createElement('div'),b=document.createElement('b'),span=document.createElement('span');b.textContent=label;span.textContent=value;row.append(b,span);target.append(row);
@@ -63,7 +64,7 @@ function showStep(index){
 function validStep(index){if(index===1)phonePreview();for(const el of steps[index].querySelectorAll('input,select,textarea')){if(!el.checkValidity()){el.reportValidity();return false;}}return true;}
 document.querySelector('#next-step').addEventListener('click',()=>{if(validStep(current))showStep(current+1);});
 document.querySelector('#previous-step').addEventListener('click',()=>showStep(current-1));
-form.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT'&&event.target.type!=='file'&&current<3){event.preventDefault();document.querySelector('#next-step').click();}});
+form.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT'&&event.target.type!=='file'&&current<steps.length-1){event.preventDefault();document.querySelector('#next-step').click();}});
 const filesInput=document.querySelector('#intake-files');
 const limits={maxFiles:12,maxFileMB:5,maxTotalMB:25};
 const typeSelect=document.querySelector('#upload-document-type');
@@ -100,7 +101,7 @@ const drop=filesInput.closest('.portal-drop');
 drop.addEventListener('dragover',event=>{event.preventDefault();drop.dataset.drag='true';});
 drop.addEventListener('dragleave',()=>{delete drop.dataset.drag;});
 drop.addEventListener('drop',event=>{event.preventDefault();delete drop.dataset.drag;addFiles([...event.dataTransfer.files]);});
-renderFiles();
+renderFiles();showStep(0);
 const readFile=({file,document_type})=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('تعذر قراءة الملف'));reader.onload=()=>resolve({name:file.name,document_type,mime:fileMime(file),content:String(reader.result).split(',')[1]});reader.readAsDataURL(file);});
 form.addEventListener('submit',async event=>{
   event.preventDefault();if(busy)return;
