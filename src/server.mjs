@@ -14,7 +14,7 @@ import { processWorkflowJobs, validateWorkflow } from './workflows.mjs';
 import { processMediaJob, maybeSyncTemplates } from './media.mjs';
 import { verifyFactor, handleMfa } from './mfa.mjs';
 import { bootstrapOwner } from './bootstrap.mjs';
-import { maybeSnapshot } from './backups.mjs';
+import { runScheduledBackups } from './scheduled-backups.mjs';
 import { reassignContactRecords } from './studio.mjs';
 import { handleBusiness } from './business-routes.mjs';
 import { ensureOmniDefaults } from './omni-config.mjs';
@@ -385,7 +385,7 @@ export function createApp(options = {}) {
     try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,transport);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,transport,secretKey);await sendSocialNext(db,secretKey,transport);await processMediaJob(db,config,transport,secretKey);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy||env.RECOVERY_MODE==='1')return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,transport);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
-  let backupBusy=false;const backupTick=async()=>{if(backupBusy||env.RECOVERY_MODE==='1')return;backupBusy=true;try{await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{backupBusy=false;}};
+  let backupBusy=false;const backupTick=async()=>{if(backupBusy||env.RECOVERY_MODE==='1')return;backupBusy=true;try{await runScheduledBackups(db,secretKey,env,transport);}catch(error){options.onError?.(error);}finally{backupBusy=false;}};
   let emailBusy=false;const emailTick=async()=>{if(emailBusy||env.RECOVERY_MODE==='1')return;emailBusy=true;try{await processCustomerEmail(db,secretKey,smtpTransportFactory);}catch(error){options.onError?.(error);}finally{emailBusy=false;}};
   return {server,db,tick,marketingTick,emailTick,backupTick,get config(){return config;}};
 }

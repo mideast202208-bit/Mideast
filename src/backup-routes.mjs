@@ -17,13 +17,13 @@ export async function handleBackupMachine(ctx){
  if(path==='/internal/backup/receipt'&&method==='POST'){
   const input=await jsonBody(req),expected=db.prepare("SELECT value FROM settings WHERE key='operations.last_backup_sha256'").get()?.value;
   if(!/^[a-f0-9]{64}$/.test(input.sha256||'')||input.sha256!==expected||!/^[a-zA-Z0-9_-]{5,150}$/.test(input.file_id||''))fail(400,'INVALID_BACKUP_RECEIPT');
-  set(db,'operations.last_offsite_at',new Date().toISOString());set(db,'operations.last_offsite_sha256',input.sha256);set(db,'operations.offsite_provider','google_drive');audit(db,null,'offsite_confirmed','backup','encrypted',{provider:'google_drive'});sendJson(res,200,{ok:true});return true;
+  set(db,'operations.last_offsite_at',new Date().toISOString());set(db,'operations.last_offsite_sha256',input.sha256);set(db,'operations.last_offsite_file_id',input.file_id);set(db,'operations.last_offsite_error','');set(db,'operations.offsite_provider','google_drive');audit(db,null,'offsite_confirmed','backup','encrypted',{provider:'google_drive'});sendJson(res,200,{ok:true});return true;
  }
  if(path!=='/internal/backup/export'||method!=='POST')fail(404,'Not found');
  rateLimit('backup-export',4,3600000);if(busy.has(db))fail(409,'BACKUP_ALREADY_RUNNING');busy.add(db);
  try{
   const result=await createRecoveryBundle(db,secretKey,{directory:env.BACKUP_DIR||resolve('backups'),sourceRoot:env.BACKUP_SOURCE_ROOT||fileURLToPath(new URL('..',import.meta.url)),publicKey:env.BACKUP_PUBLIC_KEY?.replaceAll('\\n','\n'),env});
-  set(db,'operations.last_backup_at',result.created_at);set(db,'operations.last_backup_sha256',result.sha256);set(db,'operations.backup_encrypted','true');set(db,'operations.last_backup_error','');audit(db,null,'exported','backup','encrypted',{bytes:result.bytes});
+  set(db,'operations.last_backup_at',result.created_at);set(db,'operations.last_backup_sha256',result.sha256);set(db,'operations.last_backup_filename',result.filename);set(db,'operations.backup_encrypted','true');set(db,'operations.last_backup_error','');audit(db,null,'exported','backup','encrypted',{bytes:result.bytes});
   res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Length':result.bytes,'Content-Disposition':'attachment; filename="'+result.filename+'"','X-Backup-SHA256':result.sha256,'Cache-Control':'no-store'});await pipeline(createReadStream(result.path),res);return true;
  }catch(error){set(db,'operations.last_backup_error','BACKUP_FAILED');set(db,'operations.last_backup_failure_at',new Date().toISOString());throw error;}finally{busy.delete(db);}
 }
