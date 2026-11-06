@@ -1,6 +1,9 @@
 name: Encrypted backup to company Google Drive
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/offsite-backup.yml']
   schedule:
     - cron: '17 3 * * *'
 permissions:
@@ -10,7 +13,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   backup:
-    if: vars.CRM_BACKUPS_ENABLED == 'true'
     environment: crm-backup
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -22,6 +24,22 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Check backup configuration without exposing secret values
+        env:
+          CRM_BACKUP_EXPORT_TOKEN: ${{ secrets.CRM_BACKUP_EXPORT_TOKEN }}
+          DRIVE_CLIENT_ID: ${{ secrets.DRIVE_CLIENT_ID }}
+          DRIVE_CLIENT_SECRET: ${{ secrets.DRIVE_CLIENT_SECRET }}
+          DRIVE_REFRESH_TOKEN: ${{ secrets.DRIVE_REFRESH_TOKEN }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: |
+          node --input-type=module <<'NODE'
+          const required=['CRM_BACKUP_EXPORT_TOKEN','DRIVE_CLIENT_ID','DRIVE_CLIENT_SECRET','DRIVE_REFRESH_TOKEN','DRIVE_FOLDER_ID'];
+          const missing=required.filter(name=>!process.env[name]?.trim());
+          if(missing.length){console.error('::error::Backup configuration missing: '+missing.join(', '));process.exit(1);}
+          if(process.env.CRM_BACKUP_EXPORT_TOKEN.length<32){console.error('::error::Backup export credential configuration is invalid');process.exit(1);}
+          if(process.env.DRIVE_FOLDER_ID!=='17z4giOQUiqoJ4rUUBCqT9msb9paqqNyu'){console.error('::error::Backup folder does not match the approved company destination');process.exit(1);}
+          console.log('Backup configuration is present; upload verification is still required.');
+          NODE
       - name: Download encrypted consistent snapshot, upload and verify private Drive copy
         run: node scripts/offsite-backup.mjs
         env:
