@@ -40,3 +40,13 @@ services:
         sync: false
       - key: BACKUP_EXPORT_TOKEN
         sync: false
+      - key: BACKUP_OFFSITE_ENABLED
+        value: "1"
+      - key: DRIVE_FOLDER_ID
+        sync: false
+      - key: DRIVE_CLIENT_ID
+        sync: false
+      - key: DRIVE_CLIENT_SECRET
+        sync: false
+      - key: DRIVE_REFRESH_TOKEN
+        sync: false

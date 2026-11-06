@@ -1,9 +1,11 @@
 import {statfsSync,statSync,accessSync,constants,realpathSync,existsSync} from 'node:fs';
 import {resolve,dirname,relative,isAbsolute} from 'node:path';
+import {offsiteConfiguration} from './scheduled-backups.mjs';
 export function storageHealth(db,env={},probe={}){
  const path=db.prepare('PRAGMA database_list').all().find(r=>r.name==='main')?.file||null;
  const data={type:'sqlite',path:path||':memory:',journal_mode:db.prepare('PRAGMA journal_mode').get().journal_mode,busy_timeout_ms:db.prepare('PRAGMA busy_timeout').get().timeout,schema_version:db.prepare('SELECT MAX(version) n FROM schema_versions').get().n};
- const result={database:data,storage:{verified:false},recovery_mode:env.RECOVERY_MODE==='1',backup:{encrypted_configured:Boolean(env.BACKUP_PUBLIC_KEY),export_enabled:Boolean(env.BACKUP_EXPORT_TOKEN&&env.BACKUP_PUBLIC_KEY),offsite_configured:false}};
+ const offsite=offsiteConfiguration(env);
+ const result={database:data,storage:{verified:false},recovery_mode:env.RECOVERY_MODE==='1',backup:{encrypted_configured:Boolean(env.BACKUP_PUBLIC_KEY),export_enabled:Boolean(env.BACKUP_EXPORT_TOKEN&&env.BACKUP_PUBLIC_KEY),offsite_enabled:offsite.enabled,offsite_configured:offsite.configured,interval_hours:Number(env.BACKUP_INTERVAL_HOURS||0)}};
  if(!path)return result;
  try{
   const root=realpathSync(path),folder=dirname(root),mounted=resolve(env.PERSISTENT_DATA_DIR||'/app/data'),key=env.KEY_PATH||resolve(folder,'server.key'),backups=env.BACKUP_DIR||resolve('backups');
