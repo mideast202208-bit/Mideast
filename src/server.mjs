@@ -31,6 +31,7 @@ import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
 import {handleBackupMachine,backupDiagnostics} from './backup-routes.mjs';
 import {healthStatus} from './storage-health.mjs';
 import {startupPreflight} from './startup-preflight.mjs';
+import {ensureCommerceSchema,handleCommercePublic,handleCommerce,sendCommerceNext} from './commerce.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
@@ -49,6 +50,7 @@ export function createApp(options = {}) {
   }
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
+  ensureCommerceSchema(db);
   recoverCustomerEmailJobs(db);
   recoverMarketingJobs(db);
   let config = effectiveConfig(db,env,secretKey);
@@ -103,6 +105,7 @@ export function createApp(options = {}) {
       if(marketingImage&&method==='GET'){const image=db.prepare('SELECT mime,content FROM marketing_assets WHERE id=?').get(marketingImage[1]);if(!image)fail(404,'الصورة غير متاحة');res.writeHead(200,{'Content-Type':image.mime,'Cache-Control':'public,max-age=86400','Cross-Origin-Resource-Policy':'cross-origin'});res.end(image.content);return;}
       if(path==='/health' && method==='GET'){const health=healthStatus(db,env);sendJson(res,health.code,health.body);return;}
       if(await handleBackupMachine({path,method,req,res,db,env,secretKey,jsonBody,sendJson,rateLimit}))return;
+      if(await handleCommercePublic({db,path,method,req,res,env,secretKey,rawBody,sendJson,rateLimit}))return;
       if(path==='/webhooks/whatsapp'){
         if(method==='GET'){
           if(url.searchParams.get('hub.mode')!=='subscribe'||![config,...extraAccountConfigs(db,'whatsapp',secretKey)].some(c=>c.verifyToken&&url.searchParams.get('hub.verify_token')===c.verifyToken))fail(403,'Forbidden');
@@ -125,7 +128,7 @@ export function createApp(options = {}) {
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
         if(path==='/phone-lib.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(readFileSync(new URL('../node_modules/libphonenumber-js/bundle/libphonenumber-min.js',import.meta.url)));return;}
-        const assets={'/student-records.js':['student-records.js','text/javascript; charset=utf-8'],'/student-records.css':['student-records.css','text/css; charset=utf-8'],'/navigation.css':['navigation.css','text/css; charset=utf-8'],'/record-views.js':['record-views.js','text/javascript; charset=utf-8'],'/record-views.css':['record-views.css','text/css; charset=utf-8'],'/record-messenger.js':['record-messenger.js','text/javascript; charset=utf-8'],'/chat-ui.js':['chat-ui.js','text/javascript; charset=utf-8'],'/chat.css':['chat.css','text/css; charset=utf-8'],'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
+        const assets={'/commerce':['commerce.html','text/html; charset=utf-8'],'/commerce.js':['commerce.js','text/javascript; charset=utf-8'],'/commerce.css':['commerce.css','text/css; charset=utf-8'],'/student-records.js':['student-records.js','text/javascript; charset=utf-8'],'/student-records.css':['student-records.css','text/css; charset=utf-8'],'/navigation.css':['navigation.css','text/css; charset=utf-8'],'/record-views.js':['record-views.js','text/javascript; charset=utf-8'],'/record-views.css':['record-views.css','text/css; charset=utf-8'],'/record-messenger.js':['record-messenger.js','text/javascript; charset=utf-8'],'/chat-ui.js':['chat-ui.js','text/javascript; charset=utf-8'],'/chat.css':['chat.css','text/css; charset=utf-8'],'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
@@ -175,6 +178,7 @@ export function createApp(options = {}) {
       // send an authorized stored file through the server, but cannot read it.
       if(!canViewContactDetails(user)&&method==='GET'&&(/^\/api\/files\//.test(path)||/^\/api\/print\//.test(path)))fail(403,'الأصل قد يحتوي بيانات اتصال؛ اطلب نسخة منقحة من الإدارة');
       if(await handleCustomerExport({db,user,path,method,req,res,jsonBody}))return;
+      if(await handleCommerce({db,user,path,method,req,res,jsonBody,sendJson,secretKey,env}))return;
       if(await handleCustomerWorkspace({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,smtpTransportFactory}))return;
       if(await handleMarketing({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
       if(await handleCommunication({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
@@ -387,7 +391,8 @@ export function createApp(options = {}) {
   let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy||env.RECOVERY_MODE==='1')return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,transport);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
   let backupBusy=false;const backupTick=async()=>{if(backupBusy||env.RECOVERY_MODE==='1')return;backupBusy=true;try{await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{backupBusy=false;}};
   let emailBusy=false;const emailTick=async()=>{if(emailBusy||env.RECOVERY_MODE==='1')return;emailBusy=true;try{await processCustomerEmail(db,secretKey,smtpTransportFactory);}catch(error){options.onError?.(error);}finally{emailBusy=false;}};
-  return {server,db,tick,marketingTick,emailTick,backupTick,get config(){return config;}};
+  let commerceBusy=false;const commerceTick=async()=>{if(commerceBusy||env.RECOVERY_MODE==='1')return;commerceBusy=true;try{await sendCommerceNext(db,secretKey,env,transport);}catch(error){options.onError?.(error);}finally{commerceBusy=false;}};
+  return {server,db,tick,marketingTick,emailTick,backupTick,commerceTick,get config(){return config;}};
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   process.umask(0o077);
@@ -405,6 +410,7 @@ if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))
   const marketingTimer=setInterval(app.marketingTick,10000);marketingTimer.unref();
   const backupTimer=setInterval(app.backupTick,30000);backupTimer.unref();
   const emailTimer=setInterval(app.emailTick,5000);emailTimer.unref();
-  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);clearInterval(backupTimer);clearInterval(emailTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
+  const commerceTimer=setInterval(app.commerceTick,5000);commerceTimer.unref();
+  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);clearInterval(backupTimer);clearInterval(emailTimer);clearInterval(commerceTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
   process.on('SIGTERM',stop);process.on('SIGINT',stop);
 }
