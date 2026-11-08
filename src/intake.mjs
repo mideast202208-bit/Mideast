@@ -4,7 +4,7 @@ import { token,hash,normalizePhone } from './security.mjs';
 import { encryptSecret,decryptSecret } from './integration-settings.mjs';
 import { intakeSettings,intakeOwner,channelNames } from './omni-config.mjs';
 import { validateAppData } from './studio.mjs';
-import { claimEnabled,intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
+import { claimEnabled,intakeAssignment,prepareReturningIntake,recordCrmIntake } from './crm-inbox.mjs';
 import { queueMessage } from './whatsapp.mjs';
 import { resolveRegistrationLink } from './intake-links.mjs';
 
@@ -72,7 +72,7 @@ export function createRegistration(db,input,key,origin){
     const byPhone=db.prepare('SELECT * FROM contacts WHERE phone=?').get(clean.phone);
     if(linked&&((linked.phone&&linked.phone!==clean.phone)||(byPhone&&byPhone.id!==linked.id)))fail(409,'الرقم مرتبط بملف مختلف؛ تواصل مع الفريق لمراجعة ربط الحساب');
     let contact=linked||byPhone,created=!contact;
-    const routing=created?intakeAssignment(db,owner.id):null;
+    const routing=contact?prepareReturningIntake(db,contact):intakeAssignment(db,owner.id);
     if(!contact){
       contact={id:uid(),name:clean.name,phone:clean.phone,email:clean.email,owner_id:routing.id,source:clean.source};
       db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,contact.phone,contact.email,clean.source,contact.owner_id,'{}',now(),now());

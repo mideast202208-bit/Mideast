@@ -25,3 +25,17 @@
 .customer-email-history{margin:18px 0;padding:12px;border:1px solid #dce5e8;border-radius:10px}.customer-email-history summary{cursor:pointer;font-weight:600}
 .customer-email-history article{padding:12px 0;border-bottom:1px solid #e6ecef}.customer-email-history small{display:block;margin-top:5px;color:#657580;font-size:11px}
 @media(max-width:520px){.customer-channel-grid{grid-template-columns:1fr}.customer-channel{padding:12px}.customer-last-action{padding:12px}.customer-timeline{max-height:340px}}
+
+.service-tabs,
+.opportunity-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .65rem;
+  margin-block-end: 1rem;
+}
+.opportunity-summary {
+  padding: .85rem 1rem;
+  background: var(--soft, #edf5f1);
+  border-radius: 12px;
+}

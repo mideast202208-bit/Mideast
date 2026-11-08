@@ -35,7 +35,9 @@ test('website registration adds one private opportunity, contact, notification, 
     const item=(await request(f,'/api/crm-inbox',first)).data.waiting[0];
     const lead=f.db.prepare('SELECT * FROM leads').get();
     assert.equal(item.lead_id,lead.id);assert.equal(item.contact_name,undefined);assert.equal(item.title,undefined);
+    assert.equal(item.owner_id,null);
     assert.equal(adminFeed.waiting[0].contact_name,payload.name);
+    assert.equal((await request(f,'/api/data',admin)).data.leads[0].owner_id,null);
     assert.equal((await request(f,'/api/data',first)).data.contacts.length,0);
     assert.equal((await request(f,'/api/contacts/'+lead.contact_id+'/workspace',second)).status,404);
     const results=await Promise.all([first,second].map(a=>request(f,'/api/crm-inbox/'+lead.id+'/claim',a,{})));
@@ -72,10 +74,65 @@ for(const channel of ['whatsapp','facebook','instagram']){
       const admin=session(f,f.users.owner);
       const activity=(await request(f,'/api/contacts/'+contact.id+'/workspace',admin)).data.timeline;
       assert(activity.some(e=>e.action==='received'&&e.channel===channel));
+      const agent=session(f,f.users.intake),other=session(f,f.users.assigned);
+      const lead=f.db.prepare('SELECT id FROM leads').get();
+      assert.equal((await request(f,'/api/crm-inbox/'+lead.id+'/claim',agent,{})).status,200);
+      const workspace=(await request(f,'/api/contacts/'+contact.id+'/workspace',agent)).data;
+      const key=workspace.channels.find(c=>c.channel===channel).thread_key;
+      const messages='/api/communication/threads/'+encodeURIComponent(key)+'/messages';
+      assert.equal((await request(f,messages,other,{body:'Unauthorized reply'})).status,404);
+      assert.equal((await request(f,messages,agent,{body:'Synthetic reply from the opportunity'})).status,201);
+      assert((await request(f,messages,agent)).data.some(m=>m.direction==='out'&&m.body==='Synthetic reply from the opportunity'&&m.status==='queued'));
+      const timeline=(await request(f,'/api/contacts/'+contact.id+'/workspace',agent)).data.timeline;
+      assert(timeline.some(e=>e.action==='queued'&&e.channel===channel&&e.author===f.users.intake.name));
       assert.equal(f.externalCalls,0);
     }finally{await f.close();}
   });
 }
+
+test('a returning WhatsApp contact queues a fresh opportunity after closure and retains previous history',async()=>{
+  const f=await inboundFixture({followup:false});
+  try{
+    f.db.prepare("INSERT INTO settings VALUES('crm.claim_enabled','1')").run();
+    const contact=f.seedContact('whatsapp',{stage:'won'});
+    const previous=f.db.prepare('SELECT id FROM leads').get();
+    await f.post('whatsapp',f.payload('whatsapp','synthetic-return'));f.drain();
+    const previousAgent=session(f,f.users.assigned),nextAgent=session(f,f.users.intake);
+    const waiting=(await request(f,'/api/crm-inbox',nextAgent)).data.waiting[0];
+    assert.notEqual(waiting.lead_id,previous.id);
+    assert.equal((await request(f,'/api/contacts/'+contact.id+'/workspace',previousAgent)).status,404);
+    assert.equal((await request(f,'/api/crm-inbox/'+waiting.lead_id+'/claim',nextAgent,{})).status,200);
+    await f.post('whatsapp',f.payload('whatsapp','synthetic-followup'));f.drain();
+    assert.equal(count(f,'crm_waiting'),0);
+    assert.equal(count(f,'contacts'),1);
+    assert.equal(count(f,'leads'),2);
+    const leads=(await request(f,'/api/data',nextAgent)).data.leads;
+    assert.equal(leads.find(l=>l.id===previous.id).stage,'won');
+    assert.equal(leads.find(l=>l.id===waiting.lead_id).owner_id,f.users.intake.id);
+  }finally{await f.close();}
+});
+
+test('website enquiry text is preserved on the claimed record and private beforehand',async()=>{
+  const f=await inboundFixture({followup:false});
+  try{
+    f.db.prepare("INSERT INTO settings VALUES('crm.claim_enabled','1')").run();
+    const submitted=await request(f,'/public/enquiries',{},{
+      name:'Synthetic student',phone:'+201000000077',phone_country:'EG',consent:true,whatsapp_opt_in:true,request_key:'synthetic-website-enquiry-test',
+      notes:'Synthetic question about the application process',
+    });
+    assert.equal(submitted.status,201);
+    const staff=session(f,f.users.intake);
+    const lead=f.db.prepare('SELECT id,contact_id FROM leads').get();
+    const path='/api/contacts/'+lead.contact_id+'/workspace';
+    assert.equal((await request(f,path,staff)).status,404);
+    assert.equal((await request(f,'/api/crm-inbox/'+lead.id+'/claim',staff,{})).status,200);
+    const workspace=(await request(f,path,staff)).data;
+    assert(workspace.channels.some(c=>c.channel==='whatsapp'&&c.templates_allowed===true));
+    const history=workspace.timeline;
+    assert(history.some(e=>e.channel==='website'&&e.body==='Synthetic question about the application process'));
+    assert.equal(f.externalCalls,0);
+  }finally{await f.close();}
+});
 
 test('an owner can retry a failed inbound event at most three times without changing customer records',async()=>{
   const f=await inboundFixture();

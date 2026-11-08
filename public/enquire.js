@@ -39,6 +39,7 @@ form.addEventListener('submit',async event=>{
   error.textContent='';
   const data=Object.fromEntries(new FormData(form));
   data.consent=form.elements.consent.checked;
+  data.whatsapp_opt_in=form.elements.whatsapp_opt_in.checked;
   try{
     const response=await fetch('/public/enquiries',{
       method:'POST',headers:{'Content-Type':'application/json'},

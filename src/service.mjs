@@ -114,7 +114,10 @@ export function getData(db, user) {
   const scope = manager(user) ? '' : ' WHERE owner_id=?';
   const args = manager(user) ? [] : [user.id];
   const contacts = db.prepare('SELECT c.*,COALESCE(p.whatsapp_opt_in,0) AS whatsapp_opt_in FROM contacts c LEFT JOIN contact_preferences p ON p.contact_id=c.id' + (manager(user)?'':' WHERE c.owner_id=?') + ' ORDER BY c.created_at DESC').all(...args);
-  const leads = user.role === 'accountant' ? [] : db.prepare('SELECT * FROM leads' + scope + ' ORDER BY updated_at DESC').all(...args);
+  const leads = user.role === 'accountant' ? [] : db.prepare(`SELECT l.*,q.lead_id IS NOT NULL AS awaiting_claim
+    FROM leads l LEFT JOIN crm_waiting q ON q.lead_id=l.id
+    ${manager(user)?'':'WHERE l.owner_id=? AND q.lead_id IS NULL'} ORDER BY l.updated_at DESC`).all(...args)
+    .map(lead=>lead.awaiting_claim?{...lead,owner_id:null}:lead);
   const tasks = user.role === 'accountant' ? [] : db.prepare('SELECT * FROM tasks' + scope + ' ORDER BY due_at').all(...args);
   const tickets = user.role === 'accountant' ? [] : db.prepare('SELECT * FROM tickets' + scope + ' ORDER BY updated_at DESC').all(...args);
   const conversations = user.role === 'accountant' ? [] : db.prepare(`SELECT v.*,c.name,c.phone,c.owner_id,

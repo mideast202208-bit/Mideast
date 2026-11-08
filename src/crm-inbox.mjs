@@ -8,8 +8,9 @@ export function claimEnabled(db){
 
 export function intakeAssignment(db,fallback){
   if(!claimEnabled(db))return {id:fallback,waiting:false};
-  const custodian=db.prepare("SELECT id FROM users WHERE role='admin' AND active=1 ORDER BY created_at,id LIMIT 1").get();
-  return {id:custodian?.id??fallback,waiting:Boolean(custodian)};
+  const custodian=db.prepare("SELECT id FROM users WHERE role IN('admin','manager') AND active=1 ORDER BY role,created_at,id LIMIT 1").get();
+  if(!custodian)fail(503,'صندوق خدمة العملاء يحتاج حساب إدارة نشط');
+  return {id:custodian.id,waiting:true};
 }
 
 export function recordCrmIntake(db,{contactId,leadId,kind,eventId,source,waiting=false}){
@@ -25,13 +26,27 @@ export function recordCrmIntake(db,{contactId,leadId,kind,eventId,source,waiting
   }
 }
 
-// The CRM uses contact-wide access to conversations and files. Change the
-// complete ownership boundary together with the claim inside one transaction.
+function moveContactRecords(db,id,next){
+  db.prepare('UPDATE contacts SET owner_id=?,updated_at=? WHERE id=?').run(next,now(),id);
+  for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(next,id);
+  reassignContactRecords(db,id,next);
+}
+
+// The CRM scopes conversations and documents by contact. A returning contact
+// with no active opportunity goes back to the queue with its history intact.
+export function prepareReturningIntake(db,contact){
+  if(!claimEnabled(db)||db.prepare("SELECT 1 FROM leads WHERE contact_id=? AND stage NOT IN('won','lost') LIMIT 1").get(contact.id))return null;
+  const routing=intakeAssignment(db,contact.owner_id);
+  if(contact.owner_id!==routing.id){
+    moveContactRecords(db,contact.id,routing.id);
+    audit(db,null,'queued_for_claim','contact',contact.id,{previous_owner_id:contact.owner_id});
+    contact.owner_id=routing.id;
+  }
+  return routing;
+}
+
 export function transferCrmContact(db,user,contact,next,reason){
-  const at=now();
-  db.prepare('UPDATE contacts SET owner_id=?,updated_at=? WHERE id=?').run(next,at,contact.id);
-  for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(next,contact.id);
-  reassignContactRecords(db,contact.id,next);
+  moveContactRecords(db,contact.id,next);
   db.prepare('DELETE FROM crm_waiting WHERE contact_id=?').run(contact.id);
   audit(db,user,'assigned','contact',contact.id,{previous_owner_id:contact.owner_id,owner_id:next,reason});
   recordCrmIntake(db,{contactId:contact.id,leadId:null,kind:'assignment',eventId:uid(),source:contact.source});
@@ -40,11 +55,11 @@ export function transferCrmContact(db,user,contact,next,reason){
 export function crmFeed(db,user){
   if(user.role==='accountant')fail(403,'هذه القائمة لفريق خدمة العملاء');
   const management=manager(user);
-  const waiting=db.prepare(`SELECT q.lead_id,q.source,q.created_at,
+  const waiting=db.prepare(`SELECT q.lead_id,q.source,q.created_at,NULL AS owner_id,
     (SELECT MIN(due_at) FROM tasks t WHERE t.lead_id=q.lead_id AND t.status='open') AS due_at
     ${management?',l.title,c.name AS contact_name':''}
     FROM crm_waiting q JOIN leads l ON l.id=q.lead_id JOIN contacts c ON c.id=q.contact_id
-    ORDER BY q.created_at,q.lead_id LIMIT 100`).all();
+    WHERE l.stage NOT IN('won','lost') ORDER BY q.created_at,q.lead_id LIMIT 100`).all();
   const visibility=management?'1=1':'c.owner_id=? OR q.contact_id IS NOT NULL';
   const scope=management?[]:[user.id];
   const activity=db.prepare(`SELECT a.seq,a.kind,a.source,a.created_at FROM crm_activity a JOIN contacts c ON c.id=a.contact_id
@@ -57,7 +72,8 @@ export function crmFeed(db,user){
   const failures=management?db.prepare(`SELECT id,'whatsapp' AS source,created_at,'PROCESSING_FAILED' AS code FROM webhook_events WHERE status='error'
     UNION ALL SELECT id,channel AS source,created_at,error_code AS code FROM social_events WHERE status='error'
     ORDER BY created_at DESC LIMIT 25`).all():[];
-  return {waiting,activity,metrics,failures,enabled:claimEnabled(db),waiting_count:db.prepare('SELECT COUNT(*) n FROM crm_waiting').get().n};
+  const waitingCount=db.prepare("SELECT COUNT(*) n FROM crm_waiting q JOIN leads l ON l.id=q.lead_id WHERE l.stage NOT IN('won','lost')").get().n;
+  return {waiting,activity,metrics,failures,enabled:claimEnabled(db),waiting_count:waitingCount};
 }
 
 export async function handleCrmInbox({db,user,path,method,req,res,jsonBody,sendJson}){

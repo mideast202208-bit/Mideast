@@ -1,7 +1,7 @@
 import {whatsappLookupReply} from './customer-status.mjs';
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
-import { intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
+import { intakeAssignment,prepareReturningIntake,recordCrmIntake } from './crm-inbox.mjs';
 import { uid, now, audit, runAutomations, fail, text, ensureInboundLead } from './service.mjs';
 import { intakeSettings, renderReply } from './omni-config.mjs';
 import { registrationLink } from './intake-links.mjs';
@@ -40,7 +40,7 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
             if (!item.id || !item.from || db.prepare('SELECT 1 FROM messages WHERE provider_id=?').get(item.id)) continue;
             const phone = normalizePhone('+' + item.from);
             let contact = db.prepare('SELECT * FROM contacts WHERE phone=?').get(phone);
-            const routing=!contact?intakeAssignment(db,intake.id):null;
+            const routing=contact?prepareReturningIntake(db,contact):intakeAssignment(db,intake.id);
             if (!contact) {
               const name = String((value.contacts || []).find(c => c.wa_id === item.from)?.profile?.name || phone).slice(0,200);
               contact = {id:uid(),name,phone,owner_id:routing.id};
@@ -137,7 +137,7 @@ export function queueMessage(db, user, conversation, input, config) {
     db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
       VALUES(?,?,?,?,?,?,?,?)`).run(id,conversation.id,'out',payload.type,input.body || input.template_name || '',JSON.stringify(payload),'queued',now());
     db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(id,config.phoneId);
-    audit(db,user,'queued','message',id);
+    audit(db,user,'queued','message',id,{channel:'whatsapp'});
   });
   return {id,status:'queued'};
 }

@@ -231,6 +231,7 @@ export function createApp(options = {}) {
         const current=db.prepare('SELECT * FROM leads WHERE id=?').get(leadMatch[1]);if(!current)fail(404,'الفرصة غير موجودة');
         getContact(db,user,current.contact_id);
         const stage=input.stage ?? current.stage;if(!['new','contacted','qualified','proposal','won','lost'].includes(stage))fail(400,'مرحلة غير صالحة');
+        if(['won','lost'].includes(stage)&&db.prepare('SELECT 1 FROM crm_waiting WHERE lead_id=?').get(current.id))fail(409,'استلم الفرصة أو عيّن مسؤولًا قبل إغلاقها');
         const title=text(input.title ?? current.title,'عنوان الفرصة');
         const custom=validateCustom(db,'lead',input.custom ?? JSON.parse(current.custom));
         transaction(db,()=>{

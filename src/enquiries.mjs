@@ -1,4 +1,4 @@
-import { intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
+import { intakeAssignment,prepareReturningIntake,recordCrmIntake } from './crm-inbox.mjs';
 import { transaction } from './db.mjs';
 import { internationalPhone } from './international.mjs';
 import { hash, token } from './security.mjs';
@@ -21,8 +21,9 @@ export function createEnquiry(db,input){
   const source=sources.has(input.source)?input.source:'website';
   const campaign=text(input.campaign??'','الحملة',150,false);
   const notes=text(input.notes??'','الاستفسار',1000,false);
+  const whatsappConsent=input.whatsapp_opt_in===true;
   const requestHash=hash(input.request_key);
-  const fingerprint=hash(JSON.stringify([name,phone,service,source,campaign,notes]));
+  const fingerprint=hash(JSON.stringify([name,phone,service,source,campaign,notes,...(whatsappConsent?[true]:[])]));
 
   return transaction(db,()=>{
     const prior=db.prepare('SELECT reference,fingerprint FROM quick_enquiries WHERE request_hash=?').get(requestHash);
@@ -34,7 +35,7 @@ export function createEnquiry(db,input){
     if(!intakeSettings(db).enabled||!intake)fail(503,'استقبال الاستفسارات متوقف مؤقتًا');
     const createdAt=now();
     let contact=db.prepare('SELECT * FROM contacts WHERE phone=?').get(phone);
-    const routing=!contact?intakeAssignment(db,intake.id):null;
+    const routing=contact?prepareReturningIntake(db,contact):intakeAssignment(db,intake.id);
     if(!contact){
       contact={id:uid(),name,phone,source,owner_id:routing.id};
       db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,name,phone,'',source,routing.id,'{}',createdAt,createdAt);
@@ -51,6 +52,10 @@ export function createEnquiry(db,input){
     const taskId=task?.id??uid();
     if(!task)db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,contact.id,lead.id,'الرد على الاستفسار '+reference,new Date(Date.now()+2*3600000).toISOString(),'open',lead.owner_id,createdAt);
     db.prepare('INSERT INTO quick_enquiries VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(requestHash,fingerprint,reference,lead.id,taskId,name,service,source,campaign,notes,createdAt);
+    if(whatsappConsent){
+      db.prepare('INSERT INTO contact_preferences VALUES(?,1,?) ON CONFLICT(contact_id) DO UPDATE SET whatsapp_opt_in=1,updated_at=excluded.updated_at').run(contact.id,createdAt);
+      audit(db,null,'consent','contact',contact.id,{channel:'whatsapp',source});
+    }
     recordCrmIntake(db,{contactId:contact.id,leadId:lead.id,kind:'enquiry',eventId:requestHash,source,waiting:Boolean(routing?.waiting)});
     audit(db,null,'enquiry_received','lead',lead.id,{source,owner_review:!assigned});
     return {reference,replayed:false};

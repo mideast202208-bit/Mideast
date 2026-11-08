@@ -47,7 +47,10 @@ export function createRecordMessenger({api,getUser,toast,onUpdate,getTemplates})
     finally{s.sending=false;paint(s);}
    }catch(error){if(active(s))toast(error.message,true);}
   });
-  const saved=selectedChannels.get(workspace.contact.id),channel=workspace.channels.find(c=>c.available&&c.channel!=='email'&&(saved?c.channel===saved.channel&&c.account_id===saved.account_id:c.thread_key));
+  const saved=selectedChannels.get(workspace.contact.id);
+  const channels=workspace.channels.filter(c=>c.available&&c.channel!=='email');
+  const existing=channels.filter(c=>c.thread_key).sort((a,b)=>(b.last_inbound||'').localeCompare(a.last_inbound||''));
+  const channel=channels.find(c=>c.channel===saved?.channel&&c.account_id===saved.account_id)||existing[0];
   if(channel)open(channel).catch(error=>{if(active(s))toast(error.message,true);});
   s.timer=setInterval(async()=>{
    if(!active(s)){clearInterval(s.timer);return;}
