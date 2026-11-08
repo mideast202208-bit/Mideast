@@ -1,6 +1,7 @@
 import {whatsappLookupReply} from './customer-status.mjs';
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
+import { intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
 import { uid, now, audit, runAutomations, fail, text, ensureInboundLead } from './service.mjs';
 import { intakeSettings, renderReply } from './omni-config.mjs';
 import { registrationLink } from './intake-links.mjs';
@@ -39,15 +40,16 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
             if (!item.id || !item.from || db.prepare('SELECT 1 FROM messages WHERE provider_id=?').get(item.id)) continue;
             const phone = normalizePhone('+' + item.from);
             let contact = db.prepare('SELECT * FROM contacts WHERE phone=?').get(phone);
+            const routing=!contact?intakeAssignment(db,intake.id):null;
             if (!contact) {
               const name = String((value.contacts || []).find(c => c.wa_id === item.from)?.profile?.name || phone).slice(0,200);
-              contact = {id:uid(),name,phone,owner_id:intake.id};
+              contact = {id:uid(),name,phone,owner_id:routing.id};
               db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)')
-                .run(contact.id,name,phone,'','whatsapp',intake.id,'{}',now(),now());
+                .run(contact.id,name,phone,'','whatsapp',routing.id,'{}',now(),now());
               runAutomations(db,'contact.created',contact,contact.id);
               audit(db,null,'whatsapp_created','contact',contact.id);
             }
-            ensureInboundLead(db,contact,'whatsapp');
+            const lead=ensureInboundLead(db,contact,'whatsapp');
             let conversation = db.prepare('SELECT * FROM conversations WHERE contact_id=?').get(contact.id);
             if (!conversation) {
               conversation={id:uid(),contact_id:contact.id};
@@ -71,6 +73,8 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
             // Explicit column names keep record shape changes visible and retain the latest inbound time.
             db.prepare('UPDATE conversations SET last_inbound=MAX(COALESCE(last_inbound,?),?) WHERE id=?').run(received,received,conversation.id);
             runAutomations(db,'whatsapp.received',contact,messageId);
+            recordCrmIntake(db,{contactId:contact.id,leadId:lead.id,kind:'whatsapp',eventId:messageId,source:'whatsapp',waiting:Boolean(routing?.waiting)});
+            audit(db,null,'received','message',messageId,{channel:'whatsapp'});
             const settings=intakeSettings(db);
             const lookup=windowOpen(received)&&settings.whatsapp_auto_reply&&settings.whatsapp_status_lookup===true&&kind==='text'?whatsappLookupReply(db,contact,phone,body,{firstInbound,conversationId:conversation.id,phoneId:config.phoneId}):null;
             const legacyWelcome=firstInbound&&/^https?:\/\//.test(origin)&&!(settings.whatsapp_status_lookup===true&&kind==='text');

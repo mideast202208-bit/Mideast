@@ -1,4 +1,5 @@
 import { transaction } from './db.mjs';
+import { intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
 import { uid,now,fail,audit,getContact,runAutomations,ensureInboundLead } from './service.mjs';
 import { hash,windowOpen,validSignature } from './security.mjs';
 import { channelConfig,intakeSettings,renderReply } from './omni-config.mjs';
@@ -32,17 +33,21 @@ export function processSocialEvents(db,key,origin){
           const sender=String(item.sender.id);if(!/^\d{1,40}$/.test(sender))continue;
           let thread=db.prepare('SELECT * FROM social_threads WHERE channel=? AND account_id=? AND sender_id=?').get(event.channel,config.account_id,sender);
           const first=!thread;
+          const routing=first?intakeAssignment(db,owner.id):null;
           const stamp=Number(item.timestamp);if(!Number.isFinite(stamp)||stamp<=0)continue;
           if(!thread){
-            const contact={id:uid(),name:(event.channel==='facebook'?'عميل فيسبوك ':'عميل إنستجرام ')+sender.slice(-6),owner_id:owner.id,source:event.channel};
-            db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,null,'',event.channel,owner.id,'{}',now(),now());
+            const contact={id:uid(),name:(event.channel==='facebook'?'عميل فيسبوك ':'عميل إنستجرام ')+sender.slice(-6),owner_id:routing.id,source:event.channel};
+            db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,null,'',event.channel,routing.id,'{}',now(),now());
             runAutomations(db,'contact.created',contact,contact.id);
             thread={id:uid(),contact_id:contact.id};db.prepare('INSERT INTO social_threads VALUES(?,?,?,?,?,?,?)').run(thread.id,event.channel,config.account_id,sender,contact.id,null,now());
           }
-          ensureInboundLead(db,db.prepare('SELECT * FROM contacts WHERE id=?').get(thread.contact_id),event.channel);
+          const lead=ensureInboundLead(db,db.prepare('SELECT * FROM contacts WHERE id=?').get(thread.contact_id),event.channel);
           const received=new Date(Math.min(Date.now(),stamp)).toISOString();
           const body=String(message.text|| (message.attachments?.length?'[مرفق وارد: راجعه في القناة الأصلية]':'[رسالة غير نصية]')).slice(0,10000);
-          db.prepare('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?)').run(uid(),thread.id,message.mid,'in',body,'received',null,received);
+          const messageId=uid();
+          db.prepare('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?)').run(messageId,thread.id,message.mid,'in',body,'received',null,received);
+          recordCrmIntake(db,{contactId:thread.contact_id,leadId:lead.id,kind:event.channel,eventId:messageId,source:event.channel,waiting:Boolean(routing?.waiting)});
+          audit(db,null,'received','social_message',messageId,{channel:event.channel});
           db.prepare('UPDATE social_threads SET last_inbound=MAX(COALESCE(last_inbound,?),?) WHERE id=?').run(received,received,thread.id);
           db.prepare('UPDATE channel_accounts SET last_event_at=? WHERE channel=? AND account_id=?').run(now(),event.channel,config.account_id);
           db.prepare('UPDATE communication_accounts SET last_event_at=? WHERE channel=? AND account_id=?').run(now(),event.channel,config.account_id);

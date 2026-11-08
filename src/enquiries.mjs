@@ -1,3 +1,4 @@
+import { intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
 import { transaction } from './db.mjs';
 import { internationalPhone } from './international.mjs';
 import { hash, token } from './security.mjs';
@@ -33,9 +34,10 @@ export function createEnquiry(db,input){
     if(!intakeSettings(db).enabled||!intake)fail(503,'استقبال الاستفسارات متوقف مؤقتًا');
     const createdAt=now();
     let contact=db.prepare('SELECT * FROM contacts WHERE phone=?').get(phone);
+    const routing=!contact?intakeAssignment(db,intake.id):null;
     if(!contact){
-      contact={id:uid(),name,phone,source,owner_id:intake.id};
-      db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,name,phone,'',source,intake.id,'{}',createdAt,createdAt);
+      contact={id:uid(),name,phone,source,owner_id:routing.id};
+      db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,name,phone,'',source,routing.id,'{}',createdAt,createdAt);
       runAutomations(db,'contact.created',contact,contact.id);
     }
     const assigned=db.prepare("SELECT id FROM users WHERE id=? AND active=1 AND role IN('admin','manager','agent')").get(contact.owner_id);
@@ -49,6 +51,7 @@ export function createEnquiry(db,input){
     const taskId=task?.id??uid();
     if(!task)db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,contact.id,lead.id,'الرد على الاستفسار '+reference,new Date(Date.now()+2*3600000).toISOString(),'open',lead.owner_id,createdAt);
     db.prepare('INSERT INTO quick_enquiries VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(requestHash,fingerprint,reference,lead.id,taskId,name,service,source,campaign,notes,createdAt);
+    recordCrmIntake(db,{contactId:contact.id,leadId:lead.id,kind:'enquiry',eventId:requestHash,source,waiting:Boolean(routing?.waiting)});
     audit(db,null,'enquiry_received','lead',lead.id,{source,owner_review:!assigned});
     return {reference,replayed:false};
   });

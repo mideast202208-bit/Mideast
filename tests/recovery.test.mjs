@@ -69,7 +69,7 @@ test('an explicit temporary CRM domain can sign in during DNS transition while f
 });
 test('a pending migration is blocked without encryption and takes a consistent encrypted pre-migration snapshot before changing schema',async()=>{
  const f=await fixture();try{
-  f.db.exec('DROP TABLE quick_enquiries; DELETE FROM schema_versions WHERE version=10;');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
+  f.db.exec('DROP TABLE crm_activity; DROP TABLE crm_waiting; DROP TABLE quick_enquiries; DELETE FROM schema_versions WHERE version IN(10,11);');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
   await assert.rejects(()=>startupPreflight(env),/MIGRATION_REQUIRES_ENCRYPTED_BACKUP/);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);
   const preflight=await startupPreflight({...env,BACKUP_PUBLIC_KEY:keys.publicKey});assert.equal(preflight.migration_pending,true);assert.ok(preflight.backup.sha256);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);
   const restored=await restoreRecoveryBundle(join(env.BACKUP_DIR,preflight.backup.filename),join(f.folder,'pre-migration-restore'),keys.privateKey);assert.equal(restored.schema_version,9);assert.equal(restored.table_counts.attachments,1);

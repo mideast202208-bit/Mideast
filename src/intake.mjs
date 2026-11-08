@@ -4,6 +4,7 @@ import { token,hash,normalizePhone } from './security.mjs';
 import { encryptSecret,decryptSecret } from './integration-settings.mjs';
 import { intakeSettings,intakeOwner,channelNames } from './omni-config.mjs';
 import { validateAppData } from './studio.mjs';
+import { claimEnabled,intakeAssignment,recordCrmIntake } from './crm-inbox.mjs';
 import { queueMessage } from './whatsapp.mjs';
 import { resolveRegistrationLink } from './intake-links.mjs';
 
@@ -71,9 +72,10 @@ export function createRegistration(db,input,key,origin){
     const byPhone=db.prepare('SELECT * FROM contacts WHERE phone=?').get(clean.phone);
     if(linked&&((linked.phone&&linked.phone!==clean.phone)||(byPhone&&byPhone.id!==linked.id)))fail(409,'الرقم مرتبط بملف مختلف؛ تواصل مع الفريق لمراجعة ربط الحساب');
     let contact=linked||byPhone,created=!contact;
+    const routing=created?intakeAssignment(db,owner.id):null;
     if(!contact){
-      contact={id:uid(),name:clean.name,phone:clean.phone,email:clean.email,owner_id:owner.id,source:clean.source};
-      db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,contact.phone,contact.email,clean.source,owner.id,'{}',now(),now());
+      contact={id:uid(),name:clean.name,phone:clean.phone,email:clean.email,owner_id:routing.id,source:clean.source};
+      db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,contact.phone,contact.email,clean.source,contact.owner_id,'{}',now(),now());
       runAutomations(db,'contact.created',contact,contact.id);
     }
     if(linked&&!linked.phone){db.prepare("UPDATE contacts SET phone=?,email=CASE WHEN email='' THEN ? ELSE email END,updated_at=? WHERE id=?").run(clean.phone,clean.email,now(),linked.id);}
@@ -115,6 +117,8 @@ export function createRegistration(db,input,key,origin){
     const delivery=clean.whatsapp_opt_in?'pending':'not_requested';
     db.prepare('INSERT INTO intake_registrations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(record.id,record.reference,clean.request_key,fingerprint,contact.id,leadId,studentId,admissionId,existingEnquiry?.source??clean.source,existingEnquiry?.campaign??clean.campaign,hash(receipt),encryptSecret(receipt,key),fileId,delivery,null,null,record.created_at);
+    if(claimEnabled(db))db.prepare('INSERT OR IGNORE INTO conversations(id,contact_id,created_at) VALUES(?,?,?)').run(uid(),contact.id,now());
+    recordCrmIntake(db,{contactId:contact.id,leadId,kind:'registration',eventId:record.id,source:existingEnquiry?.source??clean.source,waiting:Boolean(routing?.waiting)});
     audit(db,null,'registered','intake',record.id,{source:clean.source,contact_created:created,files:files.length});
   });
   return receiptResult(db.prepare('SELECT * FROM intake_registrations WHERE id=?').get(record.id),key,origin,false);

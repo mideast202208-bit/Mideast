@@ -1,4 +1,5 @@
 import {handleCustomerExport} from './customer-export.mjs';
+import { handleCrmInbox,transferCrmContact } from './crm-inbox.mjs';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,6 @@ import { processMediaJob, maybeSyncTemplates } from './media.mjs';
 import { verifyFactor, handleMfa } from './mfa.mjs';
 import { bootstrapOwner } from './bootstrap.mjs';
 import { maybeSnapshot } from './backups.mjs';
-import { reassignContactRecords } from './studio.mjs';
 import { handleBusiness } from './business-routes.mjs';
 import { ensureOmniDefaults } from './omni-config.mjs';
 import { handleOmni,handleOmniPublic } from './omni-routes.mjs';
@@ -177,6 +177,7 @@ export function createApp(options = {}) {
         res.setHeader('Set-Cookie',`me_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${production?'; Secure':''}`);
         sendJson(res,200,{ok:true});return;
       }
+      if(await handleCrmInbox({db,user,path,method,req,res,jsonBody,sendJson}))return;
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
       if(path==='/api/operations/storage'&&method==='GET'){sendJson(res,200,backupDiagnostics(db,user,env));return;}
       // These render binary/HTML directly and bypass JSON projection. Staff may
@@ -208,7 +209,7 @@ export function createApp(options = {}) {
       const contactMatch=path.match(/^\/api\/contacts\/([^/]+)$/);
       if(contactMatch && method==='PATCH'){
         if(user.role==='accountant')fail(403,'غير مسموح');
-        const current=getContact(db,user,contactMatch[1]);const input=await jsonBody(req);
+        const input=await jsonBody(req);const current=getContact(db,user,contactMatch[1]);
         if(!canViewContactDetails(user)&&(input.phone!==undefined||input.email!==undefined))fail(403,'تعديل بيانات الاتصال متاح للإدارة فقط');
         const newOwner=owner(db,user,input.owner_id || current.owner_id);
         const name=text(input.name ?? current.name,'الاسم');
@@ -218,8 +219,7 @@ export function createApp(options = {}) {
         if(phone && db.prepare('SELECT id FROM contacts WHERE phone=? AND id<>?').get(phone,current.id))fail(409,'الرقم موجود بالفعل');
         transaction(db,()=>{
           db.prepare('UPDATE contacts SET name=?,phone=?,email=?,owner_id=?,custom=?,updated_at=? WHERE id=?').run(name,phone,email,newOwner,custom,now(),current.id);
-          for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(newOwner,current.id);
-          reassignContactRecords(db,current.id,newOwner);
+          if(newOwner!==current.owner_id)transferCrmContact(db,user,current,newOwner,'إعادة إسناد من ملف العميل');
           audit(db,user,'updated','contact',current.id,{owner_id:newOwner});
         });sendJson(res,200,{ok:true});return;
       }
@@ -227,15 +227,16 @@ export function createApp(options = {}) {
       const leadMatch=path.match(/^\/api\/leads\/([^/]+)$/);
       if(leadMatch && method==='PATCH'){
         if(user.role==='accountant')fail(403,'غير مسموح');
+        const input=await jsonBody(req);
         const current=db.prepare('SELECT * FROM leads WHERE id=?').get(leadMatch[1]);if(!current)fail(404,'الفرصة غير موجودة');
-        getContact(db,user,current.contact_id);const input=await jsonBody(req);
+        getContact(db,user,current.contact_id);
         const stage=input.stage ?? current.stage;if(!['new','contacted','qualified','proposal','won','lost'].includes(stage))fail(400,'مرحلة غير صالحة');
         const title=text(input.title ?? current.title,'عنوان الفرصة');
         const custom=validateCustom(db,'lead',input.custom ?? JSON.parse(current.custom));
         transaction(db,()=>{
           db.prepare('UPDATE leads SET stage=?,title=?,custom=?,updated_at=? WHERE id=?').run(stage,title,custom,now(),current.id);
           if(stage!==current.stage)runAutomations(db,'lead.stage_changed',{...current,stage},uid());
-          audit(db,user,'updated','lead',current.id,{stage});
+          audit(db,user,'updated','lead',current.id,{stage,previous_stage:current.stage});
         });sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/tasks' && method==='POST'){
