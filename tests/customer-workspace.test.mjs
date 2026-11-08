@@ -74,7 +74,7 @@ test('notes, record updates, sends and viewing have a scoped author/time timelin
  }finally{await f.close();}
 });
 test('migration 9 is additive and does not rewrite existing customer contact values',async()=>{
- const f=await fixture();try{assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);assert.equal(f.db.prepare('SELECT phone FROM contacts WHERE id=?').get(f.c.id).phone,f.c.phone);assert.equal(f.db.prepare('PRAGMA quick_check').get().quick_check,'ok');assert.equal(f.db.prepare('PRAGMA foreign_key_check').all().length,0);}finally{await f.close();}
+ const f=await fixture();try{assert.ok(f.db.prepare('SELECT 1 FROM schema_versions WHERE version=9').get());assert.equal(f.db.prepare('SELECT phone FROM contacts WHERE id=?').get(f.c.id).phone,f.c.phone);assert.equal(f.db.prepare('PRAGMA quick_check').get().quick_check,'ok');assert.equal(f.db.prepare('PRAGMA foreign_key_check').all().length,0);}finally{await f.close();}
 });
 test('automatic WhatsApp identity events remain system activity without replacing the last employee followup',async()=>{
  const f=await fixture();try{

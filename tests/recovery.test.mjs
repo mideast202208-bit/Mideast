@@ -69,11 +69,12 @@ test('an explicit temporary CRM domain can sign in during DNS transition while f
 });
 test('a pending migration is blocked without encryption and takes a consistent encrypted pre-migration snapshot before changing schema',async()=>{
  const f=await fixture();try{
-  f.db.exec('DROP TABLE customer_email_jobs; DELETE FROM schema_versions WHERE version=9;');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
-  await assert.rejects(()=>startupPreflight(env),/MIGRATION_REQUIRES_ENCRYPTED_BACKUP/);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,8);
-  const preflight=await startupPreflight({...env,BACKUP_PUBLIC_KEY:keys.publicKey});assert.equal(preflight.migration_pending,true);assert.ok(preflight.backup.sha256);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,8);
-  const restored=await restoreRecoveryBundle(join(env.BACKUP_DIR,preflight.backup.filename),join(f.folder,'pre-migration-restore'),keys.privateKey);assert.equal(restored.schema_version,8);assert.equal(restored.table_counts.attachments,1);
-  f.db.exec('INSERT INTO schema_versions VALUES(10)');await assert.rejects(()=>startupPreflight(env),/DATABASE_NEWER_THAN_APPLICATION/);
+  f.db.exec('DROP TABLE quick_enquiries; DELETE FROM schema_versions WHERE version=10;');const env={DB_PATH:f.path,KEY_PATH:join(f.folder,'server.key'),BACKUP_DIR:join(f.folder,'before-migration'),BACKUP_SOURCE_ROOT:sourceRoot};
+  await assert.rejects(()=>startupPreflight(env),/MIGRATION_REQUIRES_ENCRYPTED_BACKUP/);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);
+  const preflight=await startupPreflight({...env,BACKUP_PUBLIC_KEY:keys.publicKey});assert.equal(preflight.migration_pending,true);assert.ok(preflight.backup.sha256);assert.equal(f.db.prepare('SELECT MAX(version) n FROM schema_versions').get().n,9);
+  const restored=await restoreRecoveryBundle(join(env.BACKUP_DIR,preflight.backup.filename),join(f.folder,'pre-migration-restore'),keys.privateKey);assert.equal(restored.schema_version,9);assert.equal(restored.table_counts.attachments,1);
+  const migrated=openDatabase(f.path);try{assert.equal(migrated.prepare('SELECT MAX(version) n FROM schema_versions').get().n,LATEST_SCHEMA_VERSION);assert.ok(migrated.prepare("SELECT 1 FROM sqlite_master WHERE name='quick_enquiries'").get());assert.equal(migrated.prepare('SELECT COUNT(*) n FROM attachments').get().n,1);}finally{migrated.close();}
+  f.db.prepare('INSERT INTO schema_versions VALUES(?)').run(LATEST_SCHEMA_VERSION+1);await assert.rejects(()=>startupPreflight(env),/DATABASE_NEWER_THAN_APPLICATION/);
  }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
 });
 

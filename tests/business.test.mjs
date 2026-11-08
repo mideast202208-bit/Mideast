@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openDatabase } from '../src/db.mjs';
+import { LATEST_SCHEMA_VERSION,openDatabase } from '../src/db.mjs';
 import { createApp } from '../src/server.mjs';
 import { hashPassword } from '../src/security.mjs';
 import { createContact,uid,now } from '../src/service.mjs';
@@ -70,7 +70,7 @@ test('v0.3 quotations, customer notes, printable documents and readiness',async 
     });
     await t.test('readiness is restricted and does not invent successful live connectivity',async()=>{
       assert.equal((await request('/operations','GET',undefined,agent)).status,403);
-      const result=await request('/operations','GET',undefined,owner);assert.equal(result.status,200);assert.equal(result.body.database.integrity,'ok');assert.equal(result.body.database.schema_version,9);
+      const result=await request('/operations','GET',undefined,owner);assert.equal(result.status,200);assert.equal(result.body.database.integrity,'ok');assert.equal(result.body.database.schema_version,LATEST_SCHEMA_VERSION);
       assert.equal(result.body.whatsapp.live_acceptance_verified,false);assert.equal(result.body.deployment.public_hosting_verified,false);
       assert.ok(!JSON.stringify(result.body).includes(contact.name));
     });

@@ -8,6 +8,8 @@ import { runVirtualLab } from './virtual-lab.mjs';
 import { timingSafeEqual } from 'node:crypto';
 import {extraAccountConfigs} from './accounts.mjs';
 import {customerTextRedactor} from './privacy.mjs';
+import { createEnquiry,listEnquiries } from './enquiries.mjs';
+import { registrationLink } from './intake-links.mjs';
 
 export function integrationLinks(origin){
   return {website:origin+'/apply?source=website',facebook:origin+'/apply?source=facebook',instagram:origin+'/apply?source=instagram',whatsapp:origin+'/apply?source=whatsapp',api:origin+'/api/external/registrations',facebook_webhook:origin+'/webhooks/facebook',instagram_webhook:origin+'/webhooks/instagram',whatsapp_webhook:origin+'/webhooks/whatsapp',connect_script:origin+'/connect.js'};
@@ -32,6 +34,13 @@ export async function handleOmniPublic(ctx){
   if(path==='/public/intake'&&method==='GET'){
     const settings=intakeSettings(db);
     sendJson(res,200,{enabled:Boolean(settings.enabled&&intakeOwner(db)),company_name:db.prepare("SELECT value FROM settings WHERE key='company_name'").get()?.value||'Middle East',max_files:intakeLimits.maxFiles,max_file_mb:intakeLimits.maxFileMB,max_total_mb:intakeLimits.maxTotalMB,whatsapp:'201130343708'});return true;
+  }
+  if(path==='/public/enquiries'&&method==='POST'){
+    if(req.headers.origin&&req.headers.origin!==new URL(origin).origin)fail(403,'المصدر غير مسموح');
+    rateLimit('enquiry:'+req.socket.remoteAddress,30,3600000);
+    rateLimit('enquiry:global',400,3600000);
+    const result=createEnquiry(db,await jsonBody(req,8192));
+    sendJson(res,result.replayed?200:201,result);return true;
   }
   if((path==='/public/registrations'||path==='/api/external/registrations')&&method==='POST'){
     const settings=intakeSettings(db);
@@ -75,7 +84,7 @@ export function hubData(db,user,origin,config){
   const bySource=db.prepare('SELECT c.source,COUNT(*) AS contacts FROM contacts c'+scope+' GROUP BY c.source').all(...args);
   const replies=db.prepare('SELECT * FROM reply_templates ORDER BY category,name').all();
   const channels=channelSummary(db).map(c=>({...c,state:!c.active?'disabled':c.verified_at?(c.last_event_at?'receiving':'verified'):'needs_setup'}));
-  return {settings:manager(user)?intakeSettings(db):null,links:integrationLinks(origin),channels,threads,registrations,replies,by_source:bySource,
+  return {settings:manager(user)?intakeSettings(db):null,links:integrationLinks(origin),channels,threads,registrations,replies,by_source:bySource,enquiries:listEnquiries(db,user),
     whatsapp:{configured:Boolean(config.accessToken&&config.phoneId&&config.appSecret&&config.verifyToken&&config.intakeUser),approved_templates:db.prepare("SELECT name,language,components FROM wa_templates WHERE status='APPROVED'").all()},
     keys:user.role==='admin'?db.prepare('SELECT id,name,prefix,active,created_at,last_used_at FROM integration_keys ORDER BY created_at DESC').all():[],
     lab_runs:manager(user)?db.prepare('SELECT id,scenario,result,created_at FROM lab_runs ORDER BY created_at DESC LIMIT 10').all().map(r=>({...r,result:JSON.parse(r.result)})):[]};
@@ -84,6 +93,19 @@ export async function handleOmni(ctx){
   const {db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}=ctx;
   const respond=(status,value)=>{sendJson(res,status,value);return true;};
   if(path==='/api/hub'&&method==='GET')return respond(200,hubData(db,user,origin,config));
+  const enquiry=path.match(/^\/api\/enquiries\/([a-f0-9-]{36})\/registration-link$/);
+  if(enquiry&&method==='POST'){
+    if(user.role==='accountant')fail(403,'الاستفسارات لفريق العملاء');
+    const row=db.prepare(`SELECT l.contact_id,l.owner_id,l.stage,q.source,q.service FROM quick_enquiries q JOIN leads l ON l.id=q.lead_id
+      WHERE l.id=? AND NOT EXISTS (SELECT 1 FROM intake_registrations r WHERE r.lead_id=l.id)`).get(enquiry[1]);
+    if(!row||(!manager(user)&&row.owner_id!==user.id))fail(404,'الاستفسار غير متاح');
+    getContact(db,user,row.contact_id);
+    if(['won','lost'].includes(row.stage))fail(409,'الفرصة مغلقة؛ راجعها قبل إصدار رابط');
+    const url=new URL(registrationLink(row.contact_id,row.source,secretKey,origin,enquiry[1]));
+    url.searchParams.set('interest',row.service);
+    audit(db,user,'registration_link_created','lead',enquiry[1]);
+    return respond(200,{registration_url:url.href});
+  }
   if(path==='/api/channels/meta/connect'&&method==='POST')return respond(200,await connectMetaAccounts(db,user,await jsonBody(req),secretKey,origin,transport));
   const files=path.match(/^\/api\/intake\/([^/]+)\/files$/);
   if(files&&method==='GET')return respond(200,registrationFiles(db,user,files[1]));

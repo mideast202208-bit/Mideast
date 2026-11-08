@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#102c36">
+  <title>استفسار سريع | Middle East</title>
+  <link rel="stylesheet" href="/omni.css">
+</head>
+<body class="apply-body">
+  <header class="apply-nav">
+    <a href="https://mideastedu-eg.com/" class="apply-brand">Middle East · الرئيسية</a>
+    <a id="full-application" href="/apply" class="portal-chip">طلب تقديم كامل</a>
+  </header>
+  <main class="apply-layout">
+    <aside class="apply-intro">
+      <h1>عندك سؤال عن الدراسة في مصر؟</h1>
+      <p>قول لنا الخدمة اللي محتاجها، وفريق ميد إيست هيتابع معاك على رقم التواصل.</p>
+    </aside>
+    <section class="apply-card" aria-labelledby="enquiry-title">
+      <h2 id="enquiry-title">استفسار سريع</h2>
+      <p class="portal-sub">سيب اسمك ورقم التواصل والخدمة المطلوبة.</p>
+      <form id="enquiry-form" method="post">
+        <input name="company_url" tabindex="-1" autocomplete="off" class="honey" aria-hidden="true">
+        <div class="portal-fields">
+          <label class="wide">الاسم<input name="name" autocomplete="name" required maxlength="160"></label>
+          <label>دولة رقم التواصل<select name="phone_country" required></select></label>
+          <label>رقم التواصل<input name="phone" type="tel" autocomplete="tel-national" dir="ltr" required maxlength="40"></label>
+          <label class="wide">الخدمة المطلوبة<select name="service" required></select></label>
+          <label class="wide">سؤالك (اختياري)<textarea name="notes" rows="3" maxlength="1000" placeholder="اكتب سؤالك من غير أرقام مستندات أو بيانات خاصة"></textarea></label>
+        </div>
+        <label class="portal-consent"><input name="consent" type="checkbox" required><span>أوافق على استخدام البيانات للرد على استفساري ومتابعته.</span></label>
+        <div class="portal-actions"><button class="portal-primary" type="submit" disabled>إرسال الاستفسار</button></div>
+      </form>
+      <p id="enquiry-error" class="portal-error" role="alert"></p>
+      <div id="enquiry-success" role="status" hidden>
+        <p>استفسارك وصل لفريق المتابعة. احتفظ بالرقم التالي عند التواصل.</p>
+        <strong id="enquiry-reference" dir="ltr"></strong>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/enquire.js"></script>
+</body>
+</html>

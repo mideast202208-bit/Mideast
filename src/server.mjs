@@ -33,6 +33,7 @@ import {healthStatus} from './storage-health.mjs';
 import {startupPreflight} from './startup-preflight.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
+const websiteFramePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors https://mideastedu-eg.com https://www.mideastedu-eg.com; base-uri 'none'; form-action 'self'";
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
 export function createApp(options = {}) {
   const env = options.env || process.env;
@@ -91,6 +92,7 @@ export function createApp(options = {}) {
   }
   async function handler(req,res) {
     res.setHeader('X-Content-Type-Options','nosniff');
+    res.setHeader('X-Robots-Tag','noindex, nofollow');
     res.setHeader('Referrer-Policy','same-origin');
     res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-src https://www.youtube.com https://www.tiktok.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -124,12 +126,18 @@ export function createApp(options = {}) {
       if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
+        if(path==='/enquire'||path==='/enquire.js'){
+          const page=path==='/enquire';
+          if(page){res.removeHeader('X-Frame-Options');res.setHeader('Content-Security-Policy',websiteFramePolicy);}
+          res.writeHead(200,{'Content-Type':page?'text/html; charset=utf-8':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});
+          res.end(readFileSync(join(publicDir,page?'enquire.html':'enquire.js')));return;
+        }
         if(path==='/phone-lib.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(readFileSync(new URL('../node_modules/libphonenumber-js/bundle/libphonenumber-min.js',import.meta.url)));return;}
         const assets={'/student-records.js':['student-records.js','text/javascript; charset=utf-8'],'/student-records.css':['student-records.css','text/css; charset=utf-8'],'/navigation.css':['navigation.css','text/css; charset=utf-8'],'/record-views.js':['record-views.js','text/javascript; charset=utf-8'],'/record-views.css':['record-views.css','text/css; charset=utf-8'],'/record-messenger.js':['record-messenger.js','text/javascript; charset=utf-8'],'/chat-ui.js':['chat-ui.js','text/javascript; charset=utf-8'],'/chat.css':['chat.css','text/css; charset=utf-8'],'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
-          res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors https://mideastedu-eg.com https://www.mideastedu-eg.com; base-uri 'none'; form-action 'self'");
+          res.setHeader('Content-Security-Policy',websiteFramePolicy);
         }
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-cache'});res.end(readFileSync(join(publicDir,asset[0])));return;
       }

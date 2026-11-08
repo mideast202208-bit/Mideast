@@ -3,7 +3,7 @@ import { encryptSecret, decryptSecret } from './integration-settings.mjs';
 import { hash, token } from './security.mjs';
 import {extraAccountConfig,accountLimits,accountSummary} from './accounts.mjs';
 
-export const channelNames={website:'الموقع',facebook:'فيسبوك',instagram:'إنستجرام',whatsapp:'واتساب',api:'API',manual:'يدوي'};
+export const channelNames={website:'الموقع',facebook:'فيسبوك',instagram:'إنستجرام',whatsapp:'واتساب',google_sites:'Google Sites',google_forms:'Google Forms',google_business:'Google Business Profile',api:'API',manual:'يدوي'};
 export function ensureOmniDefaults(db){
   if(!db.prepare('SELECT id FROM users LIMIT 1').get()||db.prepare("SELECT value FROM settings WHERE key='omni.initialized.v4'").get())return;
   const defaults={enabled:true,website:'https://mideastedu-eg.com',facebook:'https://www.facebook.com/mideastedu',instagram:'https://www.instagram.com/mideastedu/',whatsapp:'201130343708',welcome_template:'',welcome_language:'ar',welcome_slots:['name','reference','receipt_url'],social_auto_reply:true,whatsapp_status_lookup:false};

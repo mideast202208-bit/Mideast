@@ -1,5 +1,6 @@
 import { transaction } from './db.mjs';
 import { uid,now,fail,audit } from './service.mjs';
+import { ensureAdmissionJourneyFields } from './admission-journey.mjs';
 
 export function installEducationWorkspace(db,user){
   if(user.role!=='admin')fail(403,'تجهيز التطبيقات للمالك فقط');
@@ -37,6 +38,7 @@ export function installEducationWorkspace(db,user){
     addField(admissions,'requested_service','الخدمة المطلوبة','text');
     addField(admissions,'application_status','حالة الملف','select',1,['استكمال البيانات','جمع المستندات','جاهز للتقديم','تم التقديم','قبول مبدئي','قبول نهائي','مغلق']);
     addField(admissions,'next_date','موعد المراجعة القادمة','date');
+    ensureAdmissionJourneyFields(db,admissions);
     const documents=createApp('me_documents','سجل المستندات','فهرس المستندات وحالة استلامها؛ الملف الفعلي يرفع إلى جهة الاتصال بعد تحديد الطالب.');
     addField(documents,'student','الطالب','relation',1,[],students);
     addField(documents,'application','طلب القبول','relation',0,[],admissions);
