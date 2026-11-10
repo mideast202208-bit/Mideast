@@ -281,7 +281,9 @@ export function createApp(options = {}) {
       const messagesMatch=path.match(/^\/api\/conversations\/([^/]+)\/messages$/);
       if(messagesMatch){
         const conversation=conversationFor(user,messagesMatch[1]);
-        if(method==='GET'){sendJson(res,200,db.prepare('SELECT id,provider_id,direction,kind,body,media_id,status,error_code,created_at,(SELECT id FROM attachments a WHERE a.message_id=messages.id) AS attachment_id FROM messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT 500').all(conversation.id));return;}
+        if(method==='GET'){sendJson(res,200,db.prepare(`SELECT id,provider_id,direction,kind,body,media_id,status,error_code,created_at,
+          COALESCE((SELECT id FROM attachments a WHERE a.message_id=messages.id),json_extract(payload,'$.archived_attachment_id')) AS attachment_id
+          FROM messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT 500`).all(conversation.id));return;}
         if(method==='POST'){sendJson(res,201,queueMessage(db,user,conversation,await jsonBody(req),config));return;}
       }
       if(path==='/api/conversations' && method==='POST'){
@@ -400,7 +402,7 @@ export function createApp(options = {}) {
   server.requestTimeout=120000;
   const tick=async()=>{
     if(sending||env.RECOVERY_MODE==='1')return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey,env);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,transport);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,transport,secretKey,env);await sendSocialNext(db,secretKey,transport);await processMediaJob(db,config,transport,secretKey);}catch(error){options.onError?.(error);}finally{sending=false;}
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey,env);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,transport);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,transport,secretKey,env,origin);await sendSocialNext(db,secretKey,transport);await processMediaJob(db,config,transport,secretKey);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy||env.RECOVERY_MODE==='1')return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,transport);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
   let backupBusy=false;const backupTick=async()=>{if(backupBusy||env.RECOVERY_MODE==='1')return;backupBusy=true;try{await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{backupBusy=false;}};
@@ -409,7 +411,7 @@ export function createApp(options = {}) {
   const agentTick=async()=>{
     if(agentBusy||env.RECOVERY_MODE==='1')return;
     agentBusy=true;
-    try{await processCustomerAgent(db,env,transport);}catch(error){options.onError?.(error);}
+    try{await processCustomerAgent(db,env,transport,secretKey,origin);}catch(error){options.onError?.(error);}
     finally{agentBusy=false;}
   };
   return {server,db,tick,marketingTick,emailTick,backupTick,agentTick,get config(){return config;}};

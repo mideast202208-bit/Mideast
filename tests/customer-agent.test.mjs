@@ -4,6 +4,7 @@ import {inboundFixture} from './inbound-fixture.mjs';
 import {hash,token} from '../src/security.mjs';
 import {now,uid} from '../src/service.mjs';
 import {sendNext} from '../src/whatsapp.mjs';
+import {processMediaJob} from '../src/media.mjs';
 import {agentCandidates,agentDecision,agentIntent,chooseAgentSource,safeAgentAnswer} from '../src/customer-agent-policy.mjs';
 import {fixture,renderFixture} from './ui-fixture.mjs';
 
@@ -175,4 +176,120 @@ test('owner dashboard uses the real navigation and escapes knowledge content',as
   assert.match(markup,/&lt;img src=x onerror=alert\(1\)&gt;/);assert.doesNotMatch(markup,/<img src=x/);
   const agent=await renderFixture({...data,users:[{...fixture.users[0],role:'agent'}]});
   assert.doesNotMatch(await agent.pageAsync('customer-agent'),/data-page="customer-agent"/);
+});
+
+test('first WhatsApp reply carries a signed link that registers on the same opportunity and alerts the owner about files',async()=>{
+  const f=await inboundFixture({environment:env});
+  try{
+    const admin=session(f,f.users.owner),staff=session(f,f.users.assigned),id=addPilot(f);
+    assert.equal((await prepare(f,admin)).status,200);
+    assert.equal((await enable(f,admin,id)).status,200);
+    const controls={enabled:true,replies:{greet:'أهلًا وسهلًا! نورت ميدل إيست، قول لي حابب تبدأ بإيه؟'},forbidden:'قبول فوري'};
+    assert.equal((await request(f,endpoint+'/settings',admin,controls,'PATCH')).status,200);
+    await inbound(f,'pilot-first','السلام عليكم');
+    await f.app.agentTick();
+    const [welcome]=outgoing(f),lead=f.db.prepare('SELECT id FROM leads').get();
+    assert.match(welcome.body,/نورت ميدل إيست/);
+    const link=new URL(welcome.body.split('\n').at(-1));
+    assert.equal(link.origin,f.origin);assert.equal(link.searchParams.get('enquiry'),lead.id);
+    await inbound(f,'asks-for-link-again','ممكن رابط التسجيل؟');
+    await f.app.agentTick();
+    assert.equal(outgoing(f).filter(m=>m.body.includes('/apply?')).length,1);
+    assert.match(outgoing(f).at(-1).body,/نفس الطلب/);
+    const submitted=f.registration({phone:pilotPhone,source:'website',link_token:link.searchParams.get('client'),enquiry_lead_id:lead.id,
+      registration_scope:link.searchParams.get('scope'),files:[{name:'synthetic.pdf',mime:'application/pdf',content:Buffer.from('%PDF-1.7\nSynthetic only').toString('base64')}]});
+    assert.equal((await request(f,'/public/registrations',{}, {...submitted,registration_scope:''})).status,400);
+    assert.equal((await request(f,'/public/registrations',{}, {...submitted,phone:'+12025550178'})).status,409);
+    const accepted=await request(f,'/public/registrations',{},submitted);
+    assert.equal(accepted.status,201);
+    assert.equal((await request(f,'/public/registrations',{},submitted)).data.replayed,true);
+    assert.equal((await request(f,'/public/registrations',{}, {...submitted,request_key:uid().replaceAll('-','')})).status,409);
+    assert.equal(count(f,'leads'),1);assert.equal(count(f,'intake_registrations'),1);
+    assert.deepEqual({...f.db.prepare('SELECT contact_id,lead_id,source FROM intake_registrations').get()},{contact_id:id,lead_id:lead.id,source:'whatsapp'});
+    assert.equal(f.db.prepare('SELECT status FROM messages WHERE id=?').get(welcome.id).status,'blocked');
+    const media=f.payload('whatsapp','synthetic-wa-file','',pilotPhone.slice(1));
+    Object.assign(media.entry[0].changes[0].value.messages[0],{type:'document',document:{id:'12345',filename:'synthetic.pdf'}});
+    assert.equal((await f.post('whatsapp',media)).status,200);f.drain();
+    assert.equal((await f.post('whatsapp',media)).status,200);f.drain();
+    assert.equal(f.db.prepare("SELECT COUNT(*) n FROM crm_activity WHERE kind='agent_documents'").get().n,2);
+    assert.deepEqual({...f.db.prepare("SELECT owner_id,lead_id FROM tasks WHERE title LIKE '%مستندات واردة%'").get()},{owner_id:f.users.owner.id,lead_id:lead.id});
+    assert.equal((await request(f,'/api/crm-inbox',admin)).data.activity.find(item=>item.kind==='agent_documents').lead_id,lead.id);
+    assert.ok(!(await request(f,'/api/crm-inbox',staff)).data.activity.some(item=>item.kind==='agent_documents'));
+    assert.equal((await request(f,endpoint+'/contacts/'+id,admin)).data.reason,'documents');
+    assert.equal(f.externalCalls,0);
+  }finally{await f.close();}
+});
+
+test('WhatsApp attachments before and after registration are filed once on the tracked request',async()=>{
+  const f=await inboundFixture({environment:env});
+  const bytes={11:'%PDF-1.7\nSynthetic first',12:'%PDF-1.7\nSynthetic second',13:'%PDF-1.7\nSynthetic first',14:'%PDF-1.7\nSynthetic form upload',15:'%PDF-1.7\nNeeds request review'};
+  const mediaTransport=async url=>{
+    const target=new URL(url),id=target.pathname.split('/').at(-1);
+    return target.hostname==='graph.facebook.com'?Response.json({url:'https://lookaside.fbsbx.com/'+id,mime_type:'application/pdf'}):new Response(bytes[id]);
+  };
+  try{
+    const admin=session(f,f.users.owner),outsider=session(f,f.users.intake),id=addPilot(f);
+    assert.equal((await prepare(f,admin)).status,200);assert.equal((await enable(f,admin,id)).status,200);
+    await inbound(f,'first-before-file','السلام عليكم');await f.app.agentTick();
+    const link=new URL(outgoing(f)[0].body.split('\n').at(-1));
+    const lead=f.db.prepare('SELECT id FROM leads').get();
+    const pushFile=async(mediaId,name)=>{
+      const payload=f.payload('whatsapp','file-'+mediaId,'',pilotPhone.slice(1));
+      Object.assign(payload.entry[0].changes[0].value.messages[0],{type:'document',document:{id:mediaId,filename:name}});
+      assert.equal((await f.post('whatsapp',payload)).status,200);f.drain();
+      await processMediaJob(f.db,{...f.app.config,autoMedia:false},mediaTransport,f.key);
+    };
+    const listing=endpoint+'/leads/'+lead.id+'/documents';
+    await pushFile('11','original.pdf');await pushFile('12','second.pdf');
+    assert.equal(count(f,'attachments'),2);assert.equal(count(f,'app_records'),0);
+    assert.equal((await request(f,listing,admin)).data.length,2);
+    assert.equal((await request(f,listing,outsider)).status,404);
+    const file=(number,name)=>({name,mime:'application/pdf',content:Buffer.from(bytes[number]).toString('base64')});
+    const submitted=f.registration({phone:pilotPhone,link_token:link.searchParams.get('client'),enquiry_lead_id:lead.id,registration_scope:'whatsapp',
+      files:[file(11,'from-form.pdf'),file(14,'form-only.pdf'),file(14,'renamed.pdf')]});
+    assert.equal((await request(f,'/public/registrations',{},submitted)).status,201);
+    assert.equal(count(f,'attachments'),4);
+    const registration=f.db.prepare('SELECT id,admission_id,student_id,lead_id FROM intake_registrations').get();
+    const registeredFiles='/api/intake/'+registration.id+'/files';
+    assert.equal((await request(f,registeredFiles,admin)).data.length,4);
+    f.db.prepare("UPDATE leads SET stage='won' WHERE id=?").run(lead.id);
+    await pushFile('13','different-name.pdf');await pushFile('14','same-as-form.pdf');
+    assert.equal(count(f,'attachments'),4);assert.equal(count(f,'leads'),1);assert.equal(count(f,'intake_registrations'),1);
+    assert.equal((await request(f,registeredFiles,admin)).data.length,4);
+    assert.equal((await request(f,listing,admin)).data.length,3);
+    const conversation=f.db.prepare('SELECT id FROM conversations').get();
+    const messages=(await request(f,'/api/conversations/'+conversation.id+'/messages',admin)).data;
+    assert.equal(messages.find(m=>m.provider_id==='file-13').attachment_id,messages.find(m=>m.provider_id==='file-11').attachment_id);
+    assert.equal(f.db.prepare("SELECT COUNT(*) n FROM tasks WHERE title LIKE '%مستندات واردة%'").get().n,1);
+    f.db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(uid(),id,'Another request for the same guardian','new',0,f.users.assigned.id,'{}',now(),now());
+    await pushFile('15','needs-review.pdf');
+    assert.equal((await request(f,registeredFiles,admin)).data.length,4);
+    assert.equal((await request(f,listing,admin)).data.length,4);
+  }finally{await f.close();}
+});
+
+test('owner can review a website excerpt, block exact phrases, and distinguish approved official fees from office fees',async()=>{
+  const f=await inboundFixture({environment:env,transport:async url=>{
+    assert.equal(url,'https://mideastedu-eg.com/ourservices');
+    return new Response('<title>خدماتنا</title><nav><p>القائمة</p></nav><main><h1>الدراسة في مصر</h1><p>نساعدك في اختيار الجامعة.</p><script>secret()</script></main>',{headers:{'content-type':'text/html'}});
+  }});
+  try{
+    const admin=session(f,f.users.owner),staff=session(f,f.users.assigned);
+    const website=endpoint+'/sources/website-preview';
+    assert.equal((await request(f,website,staff,{url:'https://mideastedu-eg.com/ourservices'})).status,403);
+    assert.equal((await request(f,website,admin,{url:'https://mideastedu-eg.com.evil.test/'})).status,400);
+    const imported=await request(f,website,admin,{url:'https://mideastedu-eg.com/ourservices'});
+    assert.equal(imported.status,200);assert.match(imported.data.excerpt,/نساعدك/);assert.doesNotMatch(imported.data.excerpt,/القائمة|secret/);
+    assert.equal((await request(f,endpoint+'/settings',admin,{enabled:false,forbidden:'متاح فورًا',replies:{greet:'التقديم متاح فورا'}},'PATCH')).status,200);
+    assert.equal((await request(f,endpoint+'/preview',admin,{body:'السلام عليكم'})).data.reason,'uncertain');
+    const fee={title:'بند تقديم رسمي',question:'رسوم التقديم',url:'https://mideastedu-eg.com/tuition-fees-2026',status:'approved',reviewed_until:dueDate(),official_fee:{kind:'application',amount:17,currency:'USD'}};
+    assert.equal((await request(f,endpoint+'/sources',admin,{...fee,url:''})).status,400);
+    assert.equal((await request(f,endpoint+'/sources',admin,fee)).status,201);
+    assert.match((await request(f,endpoint+'/preview',admin,{body:'رسوم التقديم كم؟'})).data.reply,/17 دولار/);
+    const office=(await request(f,endpoint+'/preview',admin,{body:'رسوم التقديم وأتعاب المكتب كام؟'})).data;
+    assert.equal(office.reason,'finance');assert.doesNotMatch(office.reply,/\d/);
+    assert.equal((await request(f,endpoint+'/sources',admin,{...fee,official_fee:{...fee.official_fee,amount:27}})).status,201);
+    assert.equal((await request(f,endpoint+'/preview',admin,{body:'رسوم التقديم كم؟'})).data.reason,'finance');
+    assert.equal(f.externalCalls,1);
+  }finally{await f.close();}
 });

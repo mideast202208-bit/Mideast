@@ -22,7 +22,12 @@ const initialParams=new URLSearchParams(location.search);
 const enquiryParams=new URLSearchParams(initialParams);
 enquiryParams.delete('client');
 enquiryParams.delete('enquiry');
-document.querySelector('#quick-enquiry').href='/enquire?'+enquiryParams;
+enquiryParams.delete('scope');
+const quickEnquiry=document.querySelector('#quick-enquiry');
+if(initialParams.get('scope')==='whatsapp'){
+  quickEnquiry.remove();
+  steps[1].querySelector('.portal-sub').textContent='اكتب اسم الطالب، واستخدم نفس رقم واتساب اللي وصله رابط التسجيل.';
+}else quickEnquiry.href='/enquire?'+enquiryParams;
 if(['بكالوريوس','ماجستير','دكتوراه'].includes(initialParams.get('service')))form.elements.level.value=initialParams.get('service');
 const serviceSelect=form.elements.requested_service;
 for(const label of ['طلب دراسة أو استشارة عامة',...services]){const option=document.createElement('option');option.value=label==='طلب دراسة أو استشارة عامة'?'':label;option.textContent=label;serviceSelect.append(option);}
@@ -113,7 +118,7 @@ form.addEventListener('submit',async event=>{
   try{
     const params=new URLSearchParams(location.search),body=Object.fromEntries(new FormData(form));
     body.request_key=requestKey;body.consent=form.elements.consent.checked;body.whatsapp_opt_in=form.elements.whatsapp_opt_in.checked;body.source=params.get('source')||'website';body.campaign=params.get('utm_campaign')||params.get('campaign')||'';
-    body.link_token=params.get('client')||'';body.enquiry_lead_id=params.get('enquiry')||'';body.files=await Promise.all(selectedFiles.map(readFile));
+    body.link_token=params.get('client')||'';body.enquiry_lead_id=params.get('enquiry')||'';body.registration_scope=params.get('scope')||'';body.files=await Promise.all(selectedFiles.map(readFile));
     const response=await fetch('/public/registrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),result=await response.json();
     if(!response.ok)throw new Error(result.error||'تعذر إرسال الطلب');
     form.hidden=true;document.querySelector('#application-success').hidden=false;

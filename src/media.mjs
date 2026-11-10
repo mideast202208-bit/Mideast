@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { uid, now, fail, audit } from './service.mjs';
 import { intakeSettings } from './omni-config.mjs';
 import {messageWhatsAppConfig} from './accounts.mjs';
+import {transaction} from './db.mjs';
+import {fileWhatsAppRequestDocument,matchingRequestAttachment} from './request-documents.mjs';
 
 export const mediaConfigured=config=>Boolean(config.accessToken&&/^v\d+\.\d+$/.test(config.version||'')&&/^\d+$/.test(config.phoneId||''));
 const auth=config=>({Authorization:'Bearer '+config.accessToken});
@@ -17,9 +19,12 @@ export function trustedMediaUrl(value){
   if(url.protocol!=='https:'||url.username||url.password||url.port||!(url.hostname==='lookaside.fbsbx.com'||url.hostname.endsWith('.fbcdn.net')||url.hostname==='lookaside.facebook.com'))fail(502,'عنوان مرفق غير موثوق');
   return url.toString();
 }
+const archivedMedia=(db,messageId)=>db.prepare(`SELECT a.id FROM messages m JOIN conversations c ON c.id=m.conversation_id
+  JOIN attachments a ON a.contact_id=c.contact_id AND (a.message_id=m.id OR a.id=json_extract(m.payload,'$.archived_attachment_id'))
+  WHERE m.id=? LIMIT 1`).get(messageId);
 export async function downloadMessageMedia(db,config,messageId,transport=fetch,key){
   if(key)config=messageWhatsAppConfig(db,key,config,messageId);
-  const existing=db.prepare('SELECT id FROM attachments WHERE message_id=?').get(messageId);if(existing)return existing;
+  const existing=archivedMedia(db,messageId);if(existing)return existing;
   const message=db.prepare('SELECT m.*,c.contact_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?').get(messageId);
   if(!message || !message.media_id || message.direction!=='in')fail(404,'لا يوجد مرفق وارد');
   if(!/^\d+$/.test(message.media_id))fail(400,'معرف المرفق غير صالح');
@@ -37,19 +42,29 @@ export async function downloadMessageMedia(db,config,messageId,transport=fetch,k
     const actual=createHash('sha256').update(bytes),expected=String(metadata.sha256);
     if(actual.digest(/^[a-f0-9]{64}$/i.test(expected)?'hex':'base64')!==expected)fail(502,'بصمة المرفق غير مطابقة');
   }
-  const id=uid();const mime=String(metadata.mime_type||'application/octet-stream').slice(0,120);
+  const mime=String(metadata.mime_type||'application/octet-stream').slice(0,120);
   const extensions={'image/jpeg':'jpg','image/png':'png','application/pdf':'pdf','audio/ogg':'ogg','audio/mpeg':'mp3','video/mp4':'mp4','image/webp':'webp'};
   const storedPayload=JSON.parse(message.payload || '{}');
   const name=String(storedPayload.filename || `whatsapp-${message.provider_id?.slice(-12) || message.id.slice(0,8)}.${extensions[mime]||'bin'}`).slice(0,200);
-  // Another manual download may have completed while the network request was in flight.
-  const duplicate=db.prepare('SELECT id FROM attachments WHERE message_id=?').get(messageId);if(duplicate)return duplicate;
-  db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(id,message.contact_id,message.id,name,mime,bytes,now());
-  db.prepare("UPDATE media_jobs SET status='done',error_code=NULL WHERE message_id=?").run(messageId);
-  audit(db,null,'archived_media','attachment',id,{message_id:messageId});return {id};
+  return transaction(db,()=>{
+    const existing=archivedMedia(db,messageId);if(existing)return existing;
+    const request=db.prepare("SELECT lead_id FROM crm_activity WHERE kind='agent_documents' AND event_id=? AND contact_id=?").get(messageId,message.contact_id);
+    const duplicate=request&&matchingRequestAttachment(db,message.contact_id,request.lead_id,bytes);
+    const id=duplicate?.id??uid();
+    if(duplicate)db.prepare("UPDATE messages SET payload=json_set(payload,'$.archived_attachment_id',?) WHERE id=?").run(id,messageId);
+    else{
+      db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(id,message.contact_id,message.id,name,mime,bytes,now());
+      audit(db,null,'archived_media','attachment',id,{message_id:messageId});
+    }
+    if(request)fileWhatsAppRequestDocument(db,message.contact_id,request.lead_id,id);
+    db.prepare("UPDATE media_jobs SET status='done',error_code=NULL WHERE message_id=?").run(messageId);
+    return {id};
+  });
 }
 export async function processMediaJob(db,config,transport=fetch,key){
-  if(!config.autoMedia || !mediaConfigured(config))return;
-  const job=db.prepare("SELECT * FROM media_jobs WHERE status='pending' AND next_at<=? ORDER BY next_at LIMIT 1").get(now());if(!job)return;
+  if(!mediaConfigured(config))return;
+  const job=db.prepare(`SELECT j.* FROM media_jobs j WHERE j.status='pending' AND j.next_at<=?
+    AND (? OR EXISTS(SELECT 1 FROM crm_activity x WHERE x.kind='agent_documents' AND x.event_id=j.message_id)) ORDER BY j.next_at LIMIT 1`).get(now(),config.autoMedia?1:0);if(!job)return;
   db.prepare("UPDATE media_jobs SET status='working',attempts=attempts+1 WHERE message_id=?").run(job.message_id);
   try{await downloadMessageMedia(db,config,job.message_id,transport,key);}
   catch(error){const retry=job.attempts<2&&error.status!==413;db.prepare('UPDATE media_jobs SET status=?,next_at=?,error_code=? WHERE message_id=?').run(retry?'pending':'error',new Date(Date.now()+60000*(job.attempts+1)).toISOString(),error.status===413?'TOO_LARGE':'MEDIA_DOWNLOAD_FAILED',job.message_id);}

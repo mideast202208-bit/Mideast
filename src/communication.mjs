@@ -21,7 +21,7 @@ export function communicationMessages(db,user,key,base,secretKey){
  const row=communicationThread(db,user,key,base,secretKey);
  if(row.kind==='social')return db.prepare(`SELECT id,direction,body,status,error_code,created_at,(SELECT reference FROM message_student_links l WHERE l.kind='social' AND l.message_id=social_messages.id) student_reference FROM social_messages WHERE thread_id=? ORDER BY created_at DESC,rowid DESC LIMIT 300`).all(row.id).reverse();
  return db.prepare(`SELECT m.id,m.direction,m.kind,m.body,m.status,m.error_code,m.created_at,m.media_id,(SELECT reference FROM message_student_links l WHERE l.kind='whatsapp' AND l.message_id=m.id) student_reference,
-  (SELECT id FROM attachments WHERE message_id=m.id LIMIT 1) AS attachment_id
+  COALESCE((SELECT id FROM attachments WHERE message_id=m.id LIMIT 1),json_extract(m.payload,'$.archived_attachment_id')) AS attachment_id
   FROM messages m LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.conversation_id=? AND COALESCE(a.phone_id,?)=? ORDER BY m.created_at DESC,m.rowid DESC LIMIT 300`).all(row.id,base.phoneId||'',row.account_id).reverse();
 }
 export function communicationData(db,user,base,origin){

@@ -99,7 +99,8 @@ async function syncCrmInbox({notify=false}={}){
   if(user?.id!==account||!Array.isArray(next.activity)||!Array.isArray(next.waiting))return;
   const revision=inboxRevision(next);
   const newItems=next.activity.filter(e=>e.seq>lastSeen());
-  if(notify&&crmInbox&&newItems.some(e=>e.seq>(crmInbox.activity[0]?.seq||0)))toast('وصل نشاط جديد في الـCRM');
+  const arriving=crmInbox&&newItems.filter(e=>e.seq>(crmInbox.activity[0]?.seq||0));
+  if(notify&&arriving?.length)toast(arriving.some(e=>e.kind==='agent_documents')?'وصلت مستندات تحتاج مراجعتك':'وصل نشاط جديد في الـCRM');
   if(crmInbox&&crmRevision!==revision)refreshCrmPending=true;
   crmInbox=next;crmRevision=revision;crmUnread=newItems.length;
   if(page==='tickets'&&serviceTab==='new')markCrmSeen();
@@ -130,8 +131,8 @@ function crmInboxView(){
   const assignButton=id=>'<button class="btn small" data-action="crm-assign" data-id="'+escape(id)+'">تعيين موظف</button>';
   const rows=inbox.waiting.map(q=>'<article class="fieldcard"><div><b>'+escape(q.title||'فرصة واردة')+'</b><p class="sub">'+escape(q.contact_name||'')+' · '+escape(sourceName(q.source)||q.source)+' · '+escape(new Date(q.created_at).toLocaleString('ar-EG'))+'</p>'+(q.due_at&&Date.parse(q.due_at)<Date.now()?badge('متأخرة','red'):'')+'</div><div class="actions"><button class="btn primary small" data-action="crm-claim" data-id="'+escape(q.lead_id)+'">استلام وفتح الفرصة</button>'+(isManager()?assignButton(q.lead_id):'')+'</div></article>').join('');
   const metrics=inbox.metrics.map(u=>'<div class="fieldcard"><b>'+escape(u.name)+'</b><span class="sub">'+u.open+' فرص نشطة · '+u.overdue+' مهام متأخرة · '+u.completed+' مهام مكتملة</span></div>').join('');
-  const kinds={agent_handoff:'حالة تحتاج تدخلًا بشريًا',registration:'تسجيل جديد',enquiry:'استفسار جديد',whatsapp:'رسالة واتساب',facebook:'رسالة فيسبوك',instagram:'رسالة إنستجرام',assignment:'تغيير مسؤول المتابعة'};
-  const events=inbox.activity.map(e=>'<div class="fieldcard"><b>'+escape(kinds[e.kind]||e.kind)+'</b><small>'+escape(sourceName(e.source)||e.source)+' · '+escape(new Date(e.created_at).toLocaleString('ar-EG'))+'</small></div>').join('');
+  const kinds={agent_documents:'مستندات واردة تحتاج مراجعتك',agent_handoff:'حالة تحتاج تدخلًا بشريًا',registration:'تسجيل جديد',enquiry:'استفسار جديد',whatsapp:'رسالة واتساب',facebook:'رسالة فيسبوك',instagram:'رسالة إنستجرام',assignment:'تغيير مسؤول المتابعة'};
+  const events=inbox.activity.map(e=>'<div class="fieldcard"><div><b>'+escape(kinds[e.kind]||e.kind)+'</b><small>'+escape(sourceName(e.source)||e.source)+' · '+escape(new Date(e.created_at).toLocaleString('ar-EG'))+'</small></div>'+(e.kind==='agent_documents'&&e.lead_id?'<button type="button" class="btn small" data-action="crm-activity-open" data-id="'+escape(e.lead_id)+'">فتح الفرصة</button>':'')+'</div>').join('');
   return '<section class="panel"><div class="panelhead"><h2>بانتظار الاستلام · '+inbox.waiting_count+'</h2>'+(user.role==='admin'?'<button class="btn small" data-action="crm-toggle">'+(inbox.enabled?'إيقاف إدخال فرص جديدة للصندوق':'تفعيل استقبال الفرص في الصندوق')+'</button>':'')+'</div>'+(rows||empty('لا توجد فرص بانتظار الاستلام','أي استفسار جديد من قناة مربوطة يظهر هنا تلقائيًا.'))+'</section>'+
     (isManager()?'<section class="panel"><h2>متابعة الفريق</h2>'+metrics+'</section>':'')+
     (isManager()?'<section class="panel"><h2>أحداث واردة تعذر معالجتها</h2>'+((inbox.failures||[]).map(e=>'<div class="fieldcard"><div><b>'+escape(sourceName(e.source))+'</b><small>'+escape(new Date(e.created_at).toLocaleString('ar-EG'))+' · '+escape(e.code||'PROCESSING_FAILED')+'</small></div>'+(user.role==='admin'?'<button class="btn small" data-action="crm-retry" data-id="'+escape(e.source+'/'+e.id)+'">إعادة المحاولة</button>':'')+'</div>').join('')||empty('لا توجد أحداث فاشلة'))+'</section>':'')+
@@ -245,10 +246,18 @@ async function showLead(id){
   const form=modal(current?'تفاصيل الفرصة':'فرصة بيع جديدة',`${summary}${current?'<button type="button" class="btn" data-action="edit-contact" data-id="'+current.contact_id+'">ملف العميل والتواصل وسجل المتابعة</button>'+(isManager()?'<button type="button" class="btn" data-action="crm-assign" data-id="'+escape(current.id)+'">تعيين مسؤول</button>':''):''}<div class="formgrid"><div class="full"><label>عنوان الفرصة *</label><input name="title" value="${escape(current?.title||'')}" required></div>${current?`<div><label>مرحلة الفرصة<select name="stage">${selectOptions(stages,current.stage)}</select></label></div>`:''}${!current?`<div><label>العميل *</label><select name="contact_id" required>${contactOptions()}</select></div><div><label>القيمة بالجنيه المصري</label><input name="value" type="number" step="0.01" min="0" value="0"></div>`:''}${customInputs('lead',current?JSON.parse(current.custom):{})}</div>`);
   bindForm(form,async(values,el)=>{const body={...Object.fromEntries(values),custom:customValues(el,'lead')};if(!current)body.value_minor=Math.round(Number(values.get('value'))*100);delete body.value;await api(current?'/leads/'+id:'/leads',current?'PATCH':'POST',body);});
   if(current){
-   const section=document.createElement('section');section.className='customer-workspace';section.dataset.agentLead=current.id;section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
+   const section=document.createElement('section');section.className='customer-workspace';section.dataset.agentLead=current.id;section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div data-request-wa-files></div><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
    const followup=document.createElement('section');followup.className='customer-followup';followup.innerHTML='<h3>ملاحظات الفريق والمتابعة</h3><label for="note-body">ملاحظة داخلية — لا تُرسل للعميل</label><textarea id="note-body" rows="3" maxlength="4000" placeholder="آخر إجراء وخطوة المتابعة التالية"></textarea><button type="button" class="btn small" data-action="add-note" data-id="'+current.contact_id+'">حفظ الملاحظة</button><div id="customer-timeline-panel"></div>';
-   form.querySelector('.modalfoot').before(section,followup);arrangeRecord(form);await loadCustomerWorkspace(current.contact_id);
+   form.querySelector('.modalfoot').before(section,followup);arrangeRecord(form);
+   await Promise.all([loadCustomerWorkspace(current.contact_id),loadRequestWhatsAppFiles(section,current.id)]);
   }
+}
+async function loadRequestWhatsAppFiles(section,leadId){
+ const area=section.querySelector('[data-request-wa-files]');
+ try{
+  const files=await api('/customer-agent/leads/'+encodeURIComponent(leadId)+'/documents');
+  if(files.length)area.innerHTML='<h4>ملفات واتساب لهذا الطلب</h4>'+files.map(file=>'<div class="fileline">'+(isManager()?'<a href="/api/files/'+escape(file.id)+'">'+escape(file.name)+'</a>':'<span>'+escape(file.name)+'</span>')+'</div>').join('');
+ }catch{area.textContent='تعذر تحميل ملفات واتساب لهذا الطلب.';}
 }
 function arrangeRecord(form){
  $('#modal').classList.add('record-modal');
@@ -260,6 +269,7 @@ function arrangeRecord(form){
 }
 async function action(name,id){
   if(name==='crm-notifications'){page='tickets';serviceTab='new';search='';await load();return;}
+  if(name==='crm-activity-open'){await showLead(id);return;}
   if(name==='service-tab'){serviceTab=id;if(id==='new')markCrmSeen();render();return;}
   if(name==='crm-retry'){await api('/crm-inbox/retry/'+id,'POST',{});await load();toast('تمت إضافة الحدث إلى طابور المعالجة');return;}
   if(name==='crm-claim'){
