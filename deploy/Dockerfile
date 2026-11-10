@@ -1,5 +1,6 @@
 FROM node:24-bookworm-slim
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 DB_PATH=/app/data/mid-east.sqlite KEY_PATH=/app/data/server.key BACKUP_DIR=/app/data/backups BACKUP_SOURCE_ROOT=/app
+ENV CRM_CLAIM_DEFAULT=1
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts

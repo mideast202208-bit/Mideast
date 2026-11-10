@@ -50,6 +50,9 @@ export function createApp(options = {}) {
   }
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
+  if(production&&env.RECOVERY_MODE!=='1'&&env.CRM_CLAIM_DEFAULT==='1'){
+    db.prepare("INSERT OR IGNORE INTO settings VALUES('crm.claim_enabled','1')").run();
+  }
   recoverCustomerEmailJobs(db);
   recoverMarketingJobs(db);
   let config = effectiveConfig(db,env,secretKey);
@@ -91,6 +94,7 @@ export function createApp(options = {}) {
     getContact(db,user,conversation.contact_id);return conversation;
   }
   async function handler(req,res) {
+    if(production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('X-Robots-Tag','noindex, nofollow');
     res.setHeader('Referrer-Policy','same-origin');
@@ -146,7 +150,8 @@ export function createApp(options = {}) {
       if(!production&&req.headers.origin){try{developmentSameHost=new URL(req.headers.origin).host===req.headers.host;}catch{}}
       if(write && req.headers.origin && !allowedOrigins.has(req.headers.origin) && !developmentSameHost)fail(403,'المصدر غير مسموح');
       if(path==='/api/setup/status'&&method==='GET'){
-        sendJson(res,200,{required:!db.prepare('SELECT id FROM users LIMIT 1').get(),browser_setup:Boolean(env.BOOTSTRAP_TOKEN&&env.BOOTSTRAP_TOKEN.length>=32)});return;
+        const required=!db.prepare('SELECT id FROM users LIMIT 1').get();
+        sendJson(res,200,{required,browser_setup:required&&Boolean(env.BOOTSTRAP_TOKEN&&env.BOOTSTRAP_TOKEN.length>=32)});return;
       }
       if(path==='/api/setup'&&method==='POST'){
         rateLimit('setup:'+req.socket.remoteAddress,10,900000);
