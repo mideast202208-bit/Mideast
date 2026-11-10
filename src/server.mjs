@@ -281,7 +281,9 @@ export function createApp(options = {}) {
       const messagesMatch=path.match(/^\/api\/conversations\/([^/]+)\/messages$/);
       if(messagesMatch){
         const conversation=conversationFor(user,messagesMatch[1]);
-        if(method==='GET'){sendJson(res,200,db.prepare('SELECT id,provider_id,direction,kind,body,media_id,status,error_code,created_at,(SELECT id FROM attachments a WHERE a.message_id=messages.id) AS attachment_id FROM messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT 500').all(conversation.id));return;}
+        if(method==='GET'){sendJson(res,200,db.prepare(`SELECT id,provider_id,direction,kind,body,media_id,status,error_code,created_at,
+          COALESCE((SELECT id FROM attachments a WHERE a.message_id=messages.id),json_extract(payload,'$.archived_attachment_id')) AS attachment_id
+          FROM messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT 500`).all(conversation.id));return;}
         if(method==='POST'){sendJson(res,201,queueMessage(db,user,conversation,await jsonBody(req),config));return;}
       }
       if(path==='/api/conversations' && method==='POST'){

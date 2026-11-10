@@ -83,7 +83,7 @@ export function attachStudentDocument(db,user,row,input,base){
  if(!student||input.student_id!==student.id)fail(409,'اختر ملف الطالب الحالي قبل حفظ المستند');
  if(row.kind!=='whatsapp')fail(400,'المستندات متاحة لمرفقات واتساب');
  if(!Object.values(documentTypes).includes(input.document_type))fail(400,'اختر نوع المستند');
- const attachment=db.prepare(`SELECT a.* FROM attachments a JOIN messages m ON m.id=a.message_id LEFT JOIN message_accounts ma ON ma.message_id=m.id WHERE a.id=? AND a.contact_id=? AND m.conversation_id=? AND COALESCE(ma.phone_id,?)=?`).get(input.attachment_id,student.contact_id,row.id,base.phoneId||'',row.account_id);
+ const attachment=db.prepare(`SELECT a.* FROM attachments a JOIN messages m ON m.id=a.message_id OR a.id=json_extract(m.payload,'$.archived_attachment_id') LEFT JOIN message_accounts ma ON ma.message_id=m.id WHERE a.id=? AND a.contact_id=? AND m.conversation_id=? AND COALESCE(ma.phone_id,?)=? LIMIT 1`).get(input.attachment_id,student.contact_id,row.id,base.phoneId||'',row.account_id);
  if(!attachment)fail(404,'المرفق غير متاح في هذه المحادثة');
  if(!['application/pdf','image/jpeg','image/png'].includes(attachment.mime))fail(400,'اختر صورة أو ملف PDF للمستند');
  const app=db.prepare("SELECT id FROM studio_apps WHERE app_key='me_documents'").get();if(!app)fail(409,'جهّز تطبيق المستندات أولًا');

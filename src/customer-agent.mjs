@@ -5,6 +5,7 @@ import {normalizeSearch} from './international.mjs';
 import {agentAllowsReply,agentCandidates,agentCanQualify,agentDecision,agentIntent,agentModel,agentReplies,agentReplyKeys,approvedWebsiteUrl,chooseAgentSource,officialFeeAnswer,officialFeeTopic,registrationIntro,requestsAgentRegistration,safeAgentAnswer} from './customer-agent-policy.mjs';
 import {registrationLink,resolveRegistrationLink,whatsappRegistrationOpportunity} from './intake-links.mjs';
 import {previewWebsiteKnowledge} from './customer-agent-website.mjs';
+import {requestWhatsAppFiles} from './request-documents.mjs';
 
 const settingsKey = 'customer_agent.settings';
 const handoffReasons = {
@@ -40,11 +41,23 @@ function providerReady(env){
   return env.RECOVERY_MODE!=='1'&&env.CUSTOMER_AGENT_OPENAI_APPROVED==='1'&&Boolean(env.CUSTOMER_AGENT_OPENAI_KEY?.trim());
 }
 
-function pilotEligible(db,env,cfg,contact,phoneId){
-  if(!cfg.enabled||!providerReady(env)||!contact||cfg.pilot_contact_id!==contact.id||
+function pilotIdentity(db,cfg,contact,phoneId){
+  if(!contact||cfg.pilot_contact_id!==contact.id||
       cfg.phone_id!==phoneId||hash(contact.phone??'')!==cfg.pilot_phone_hash)return false;
   const matches=pilotCandidates(db,cfg);
   return matches.length===1&&matches[0].id===contact.id;
+}
+
+function pilotEligible(db,env,cfg,contact,phoneId){
+  return cfg.enabled&&providerReady(env)&&pilotIdentity(db,cfg,contact,phoneId);
+}
+
+export function trackedCustomerAgentLead(db,contact,phoneId){
+  const cfg=settings(db);
+  if(!pilotIdentity(db,cfg,contact,phoneId))return null;
+  return db.prepare(`SELECT l.* FROM customer_agent_threads t JOIN conversations c ON c.id=t.conversation_id
+    JOIN leads l ON l.id=t.lead_id AND l.contact_id=c.contact_id
+    WHERE c.contact_id=? AND t.phone_id=?`).get(contact.id,phoneId);
 }
 
 function activeSources(db,cfg){
@@ -110,7 +123,7 @@ export function recordRegistrationDocuments(db,contact,leadId,eventId){
 export function ingestCustomerAgent(db,{env,contact,conversation,lead,messageId,phoneId,body,kind,mediaId,received}){
   const cfg=settings(db);
   const state=thread(db,conversation.id,phoneId);
-  if(mediaId&&['document','image'].includes(kind)&&pilotEligible(db,env,cfg,contact,phoneId)){
+  if(mediaId&&['document','image'].includes(kind)&&pilotIdentity(db,cfg,contact,phoneId)){
     recordDocuments(db,cfg,contact.id,lead.id,messageId,conversation.id);
     return true;
   }
@@ -218,15 +231,14 @@ function saveOutcome(db,job,decision,cfg,key,origin){
   let outbound=null;
   let reply=decision.reply;
   if(reply&&safeReply(db,cfg,decision.reason,reply)&&windowOpen(job.received_at)){
-    const first=!db.prepare(`SELECT 1 FROM messages m LEFT JOIN message_accounts a ON a.message_id=m.id
-      WHERE m.conversation_id=? AND m.direction='in' AND COALESCE(a.phone_id,?)=?
-      AND m.rowid<(SELECT rowid FROM messages WHERE id=?) LIMIT 1`).get(job.conversation_id,job.phone_id,job.phone_id,job.inbound_id);
-    const firstOrdinary=first&&['greet','qualify','approved_source','uncertain'].includes(decision.reason)&&['greet','lookup'].includes(agentIntent(job.body,job.kind));
-    if((firstOrdinary||decision.reason==='registration_link')&&agentAllowsReply(registrationIntro,cfg.forbidden)){
+    const first=!db.prepare(`SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.direction='in'
+      AND m.rowid<(SELECT rowid FROM messages WHERE id=?) LIMIT 1`).get(job.conversation_id,job.inbound_id);
+    const firstOrdinary=first&&['greet','qualify','approved_source','uncertain','registration_link'].includes(decision.reason)&&['greet','lookup'].includes(agentIntent(job.body,job.kind));
+    if(firstOrdinary&&agentAllowsReply(registrationIntro,cfg.forbidden)){
       const link=signedRegistrationUrl(db,job,key,origin);
       if(link)reply+=registrationSeparator+link;
-      else if(decision.reason==='registration_link')reply='لو سبق وبعت بيانات التقديم، الفريق هيتابع معاك على نفس الطلب.';
     }
+    if(decision.reason==='registration_link'&&!reply.includes(registrationSeparator))reply='هنكمل معاك على نفس الطلب. لو محتاج مساعدة في التسجيل قول لي.';
     if(!agentAllowsReply(reply.split(registrationSeparator)[0],cfg.forbidden))reply=null;
   }else reply=null;
   if(reply){
@@ -396,6 +408,14 @@ function agentDashboard(db,env){
 export async function handleCustomerAgent({db,user,path,method,req,res,jsonBody,sendJson,env,config,transport}){
   if(!path.startsWith('/api/customer-agent'))return false;
   const respond=(value,status=200)=>{sendJson(res,status,value);return true;};
+  const leadDocuments=path.match(/^\/api\/customer-agent\/leads\/([a-f0-9-]{36})\/documents$/i);
+  if(leadDocuments&&method==='GET'){
+    if(user.role==='accountant')fail(403,'مستندات الطلب لفريق خدمة العملاء');
+    const lead=db.prepare('SELECT id,contact_id,owner_id FROM leads WHERE id=?').get(leadDocuments[1]);
+    if(!lead||!manager(user)&&(lead.owner_id!==user.id||db.prepare('SELECT 1 FROM crm_waiting WHERE contact_id=?').get(lead.contact_id)))fail(404,'الطلب غير متاح');
+    getContact(db,user,lead.contact_id);
+    return respond(requestWhatsAppFiles(db,lead.contact_id,lead.id));
+  }
   const contactRoute=path.match(/^\/api\/customer-agent\/contacts\/([a-f0-9-]{36})$/i);
   if(contactRoute){
     if(user.role==='accountant')fail(403,'متابعة الوكيل لفريق خدمة العملاء');

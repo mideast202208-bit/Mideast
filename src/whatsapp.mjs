@@ -1,4 +1,4 @@
-import {customerAgentSendAllowed,ingestCustomerAgent,pauseCustomerAgent} from './customer-agent.mjs';
+import {customerAgentSendAllowed,ingestCustomerAgent,pauseCustomerAgent,trackedCustomerAgentLead} from './customer-agent.mjs';
 import {whatsappLookupReply} from './customer-status.mjs';
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
@@ -41,7 +41,8 @@ export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
             if (!item.id || !item.from || db.prepare('SELECT 1 FROM messages WHERE provider_id=?').get(item.id)) continue;
             const phone = normalizePhone('+' + item.from);
             let contact = db.prepare('SELECT * FROM contacts WHERE phone=?').get(phone);
-            const routing=contact?prepareReturningIntake(db,contact):intakeAssignment(db,intake.id);
+            const tracked=contact&&trackedCustomerAgentLead(db,contact,config.phoneId);
+            const routing=contact?(tracked?null:prepareReturningIntake(db,contact)):intakeAssignment(db,intake.id);
             if (!contact) {
               const name = String((value.contacts || []).find(c => c.wa_id === item.from)?.profile?.name || phone).slice(0,200);
               contact = {id:uid(),name,phone,owner_id:routing.id};
@@ -50,7 +51,7 @@ export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
               runAutomations(db,'contact.created',contact,contact.id);
               audit(db,null,'whatsapp_created','contact',contact.id);
             }
-            const lead=ensureInboundLead(db,contact,'whatsapp');
+            const lead=tracked??ensureInboundLead(db,contact,'whatsapp');
             let conversation = db.prepare('SELECT * FROM conversations WHERE contact_id=?').get(contact.id);
             if (!conversation) {
               conversation={id:uid(),contact_id:contact.id};
@@ -64,6 +65,7 @@ export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
             if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error('Invalid provider timestamp');
             const received = new Date(Math.min(timestamp,Date.now())).toISOString();
             const firstInbound = !db.prepare("SELECT 1 FROM messages m LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.conversation_id=? AND m.direction='in' AND COALESCE(a.phone_id,?)=? LIMIT 1").get(conversation.id,baseConfig.phoneId||'',config.phoneId);
+            const firstContactMessage=firstInbound&&!db.prepare("SELECT 1 FROM messages WHERE conversation_id=? AND direction='in' LIMIT 1").get(conversation.id);
             const messageId = uid();
             db.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?)')
               .run(messageId,conversation.id,item.id,'in',kind,body,content.id || null,JSON.stringify({filename:content.filename || ''}),'received',null,received);
@@ -82,8 +84,10 @@ export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
             const legacyWelcome=firstInbound&&/^https?:\/\//.test(origin)&&!(settings.whatsapp_status_lookup===true&&kind==='text');
             if(windowOpen(received)&&settings.whatsapp_auto_reply&&(lookup||legacyWelcome)){
               const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
-              const link=/^https?:\/\//.test(origin)?registrationLink(contact.id,'whatsapp',key,origin):'';
-              const body=lookup?lookup.body+(lookup.registration&&link?'\nإذا لم تقدم طلبًا بعد، أكمل نموذج التسجيل: '+link:''):renderReply(template?.body||'استلمنا رسالتك. فريقنا هيتابع معك.',{registration_url:link});
+              const priorRegistration=db.prepare('SELECT 1 FROM intake_registrations WHERE contact_id=? LIMIT 1').get(contact.id);
+              const link=firstContactMessage&&!priorRegistration&&/^https?:\/\//.test(origin)?registrationLink(contact.id,'whatsapp',key,origin):'';
+              const welcome='استلمنا رسالتك. فريقنا هيتابع معك.';
+              const body=lookup?lookup.body+(lookup.registration&&link?'\nإذا لم تقدم طلبًا بعد، أكمل نموذج التسجيل: '+link:''):link?renderReply(template?.body||welcome,{registration_url:link}):welcome;
               const replyId=uid();
               db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
                 VALUES(?,?,?,?,?,?,?,?)`).run(replyId,conversation.id,'out','text',body,JSON.stringify({type:'text',text:{body}}),'queued',now());

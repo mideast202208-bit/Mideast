@@ -81,7 +81,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
        <p class="sub">اكتب نطاق الإجابة وكيف يختار المعلومة. لتحديد الكلام الذي يراه العميل اكتب صياغتك في الردود التالية أو في مصدر معرفة معتمد.</p>
        <details><summary>الردود التي أريد الوكيل يقولها</summary>${Object.entries(replyLabels).map(([key,label])=>'<label>'+e(label)+'<textarea name="reply_'+key+'" rows="2" maxlength="420" placeholder="'+e(d.default_replies[key])+'">'+e(d.replies[key]||'')+'</textarea></label>').join('')}</details>
        <label>عبارات ممنوع قولها<textarea name="forbidden" rows="4" maxlength="1200" placeholder="اكتب عبارة واحدة في كل سطر">${e(d.forbidden.join('\n'))}</textarea></label>
-       <p class="sub">العبارات الممنوعة تُفحص قبل الإرسال. أضف الرسوم الرسمية من مصادر المعرفة بعد مراجعتها.</p>
+       <p class="sub">العبارات الممنوعة تُفحص قبل الإرسال. رابط التسجيل يُرسل في أول تواصل فقط، وتستمر المتابعة على نفس الطلب. أضف الرسوم الرسمية من مصادر المعرفة بعد مراجعتها.</p>
        <label>اسم صاحب رقم الاختبار<input name="pilot_name" maxlength="120" value="${e(d.pilot_name)}"></label>
        <label>آخر أرقام الهاتف<input name="pilot_suffix" inputmode="numeric" dir="ltr" maxlength="6" value="${e(d.pilot_suffix)}"></label>
        <p class="sub">احفظ الاسم ونهاية الرقم والوكيل متوقف، ثم ارجع لاختيار السجل المطابق.</p>

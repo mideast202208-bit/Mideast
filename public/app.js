@@ -246,10 +246,18 @@ async function showLead(id){
   const form=modal(current?'تفاصيل الفرصة':'فرصة بيع جديدة',`${summary}${current?'<button type="button" class="btn" data-action="edit-contact" data-id="'+current.contact_id+'">ملف العميل والتواصل وسجل المتابعة</button>'+(isManager()?'<button type="button" class="btn" data-action="crm-assign" data-id="'+escape(current.id)+'">تعيين مسؤول</button>':''):''}<div class="formgrid"><div class="full"><label>عنوان الفرصة *</label><input name="title" value="${escape(current?.title||'')}" required></div>${current?`<div><label>مرحلة الفرصة<select name="stage">${selectOptions(stages,current.stage)}</select></label></div>`:''}${!current?`<div><label>العميل *</label><select name="contact_id" required>${contactOptions()}</select></div><div><label>القيمة بالجنيه المصري</label><input name="value" type="number" step="0.01" min="0" value="0"></div>`:''}${customInputs('lead',current?JSON.parse(current.custom):{})}</div>`);
   bindForm(form,async(values,el)=>{const body={...Object.fromEntries(values),custom:customValues(el,'lead')};if(!current)body.value_minor=Math.round(Number(values.get('value'))*100);delete body.value;await api(current?'/leads/'+id:'/leads',current?'PATCH':'POST',body);});
   if(current){
-   const section=document.createElement('section');section.className='customer-workspace';section.dataset.agentLead=current.id;section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
+   const section=document.createElement('section');section.className='customer-workspace';section.dataset.agentLead=current.id;section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div data-request-wa-files></div><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
    const followup=document.createElement('section');followup.className='customer-followup';followup.innerHTML='<h3>ملاحظات الفريق والمتابعة</h3><label for="note-body">ملاحظة داخلية — لا تُرسل للعميل</label><textarea id="note-body" rows="3" maxlength="4000" placeholder="آخر إجراء وخطوة المتابعة التالية"></textarea><button type="button" class="btn small" data-action="add-note" data-id="'+current.contact_id+'">حفظ الملاحظة</button><div id="customer-timeline-panel"></div>';
-   form.querySelector('.modalfoot').before(section,followup);arrangeRecord(form);await loadCustomerWorkspace(current.contact_id);
+   form.querySelector('.modalfoot').before(section,followup);arrangeRecord(form);
+   await Promise.all([loadCustomerWorkspace(current.contact_id),loadRequestWhatsAppFiles(section,current.id)]);
   }
+}
+async function loadRequestWhatsAppFiles(section,leadId){
+ const area=section.querySelector('[data-request-wa-files]');
+ try{
+  const files=await api('/customer-agent/leads/'+encodeURIComponent(leadId)+'/documents');
+  if(files.length)area.innerHTML='<h4>ملفات واتساب لهذا الطلب</h4>'+files.map(file=>'<div class="fileline">'+(isManager()?'<a href="/api/files/'+escape(file.id)+'">'+escape(file.name)+'</a>':'<span>'+escape(file.name)+'</span>')+'</div>').join('');
+ }catch{area.textContent='تعذر تحميل ملفات واتساب لهذا الطلب.';}
 }
 function arrangeRecord(form){
  $('#modal').classList.add('record-modal');

@@ -8,6 +8,7 @@ import { claimEnabled,intakeAssignment,prepareReturningIntake,recordCrmIntake } 
 import { queueMessage } from './whatsapp.mjs';
 import { resolveRegistrationLink,whatsappRegistrationOpportunity } from './intake-links.mjs';
 import { recordRegistrationDocuments } from './customer-agent.mjs';
+import { documentOnAnotherRequest,fileWhatsAppRequestDocument,matchingRequestAttachment,requestWhatsAppFiles } from './request-documents.mjs';
 
 import {internationalPhone,nationality} from './international.mjs';
 import {documentTypes} from '../public/documents.js';
@@ -110,14 +111,24 @@ export function createRegistration(db,input,key,origin){
       db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(uid(),apps.me_documents,name,assigned.id,values,now(),now());
     };
     indexDocument('ملف التسجيل '+record.reference,fileId);
+    const indexed=new Set();
     for(const file of files){
-      const attachmentId=uid();db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(attachmentId,contact.id,null,file.name,file.mime,file.bytes,now());
+      const fingerprint=hash(file.bytes);
+      if(indexed.has(fingerprint))continue;
+      indexed.add(fingerprint);
+      const match=clean.registration_scope==='whatsapp'&&matchingRequestAttachment(db,contact.id,leadId,file.bytes);
+      const existing=match&&!documentOnAnotherRequest(db,match.id,studentId,admissionId);
+      const attachmentId=existing?match.id:uid();
+      if(!existing)db.prepare('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)').run(attachmentId,contact.id,null,file.name,file.mime,file.bytes,now());
       indexDocument(file.name,attachmentId,file.document_type);
     }
     if(clean.whatsapp_opt_in)db.prepare('INSERT INTO contact_preferences VALUES(?,1,?) ON CONFLICT(contact_id) DO UPDATE SET whatsapp_opt_in=1,updated_at=excluded.updated_at').run(contact.id,now());
     const delivery=clean.whatsapp_opt_in?'pending':'not_requested';
     db.prepare('INSERT INTO intake_registrations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(record.id,record.reference,clean.request_key,fingerprint,contact.id,leadId,studentId,admissionId,existingEnquiry?.source??clean.source,existingEnquiry?.campaign??clean.campaign,hash(receipt),encryptSecret(receipt,key),fileId,delivery,null,null,record.created_at);
+    if(clean.registration_scope==='whatsapp'){
+      for(const file of requestWhatsAppFiles(db,contact.id,leadId))fileWhatsAppRequestDocument(db,contact.id,leadId,file.id);
+    }
     if(claimEnabled(db))db.prepare('INSERT OR IGNORE INTO conversations(id,contact_id,created_at) VALUES(?,?,?)').run(uid(),contact.id,now());
     recordCrmIntake(db,{contactId:contact.id,leadId,kind:'registration',eventId:record.id,source:existingEnquiry?.source??clean.source,waiting:Boolean(routing?.waiting)});
     if(files.length&&clean.registration_scope==='whatsapp')recordRegistrationDocuments(db,contact,leadId,record.id);

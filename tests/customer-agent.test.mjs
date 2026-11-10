@@ -4,6 +4,7 @@ import {inboundFixture} from './inbound-fixture.mjs';
 import {hash,token} from '../src/security.mjs';
 import {now,uid} from '../src/service.mjs';
 import {sendNext} from '../src/whatsapp.mjs';
+import {processMediaJob} from '../src/media.mjs';
 import {agentCandidates,agentDecision,agentIntent,chooseAgentSource,safeAgentAnswer} from '../src/customer-agent-policy.mjs';
 import {fixture,renderFixture} from './ui-fixture.mjs';
 
@@ -191,6 +192,10 @@ test('first WhatsApp reply carries a signed link that registers on the same oppo
     assert.match(welcome.body,/نورت ميدل إيست/);
     const link=new URL(welcome.body.split('\n').at(-1));
     assert.equal(link.origin,f.origin);assert.equal(link.searchParams.get('enquiry'),lead.id);
+    await inbound(f,'asks-for-link-again','ممكن رابط التسجيل؟');
+    await f.app.agentTick();
+    assert.equal(outgoing(f).filter(m=>m.body.includes('/apply?')).length,1);
+    assert.match(outgoing(f).at(-1).body,/نفس الطلب/);
     const submitted=f.registration({phone:pilotPhone,source:'website',link_token:link.searchParams.get('client'),enquiry_lead_id:lead.id,
       registration_scope:link.searchParams.get('scope'),files:[{name:'synthetic.pdf',mime:'application/pdf',content:Buffer.from('%PDF-1.7\nSynthetic only').toString('base64')}]});
     assert.equal((await request(f,'/public/registrations',{}, {...submitted,registration_scope:''})).status,400);
@@ -212,6 +217,54 @@ test('first WhatsApp reply carries a signed link that registers on the same oppo
     assert.ok(!(await request(f,'/api/crm-inbox',staff)).data.activity.some(item=>item.kind==='agent_documents'));
     assert.equal((await request(f,endpoint+'/contacts/'+id,admin)).data.reason,'documents');
     assert.equal(f.externalCalls,0);
+  }finally{await f.close();}
+});
+
+test('WhatsApp attachments before and after registration are filed once on the tracked request',async()=>{
+  const f=await inboundFixture({environment:env});
+  const bytes={11:'%PDF-1.7\nSynthetic first',12:'%PDF-1.7\nSynthetic second',13:'%PDF-1.7\nSynthetic first',14:'%PDF-1.7\nSynthetic form upload',15:'%PDF-1.7\nNeeds request review'};
+  const mediaTransport=async url=>{
+    const target=new URL(url),id=target.pathname.split('/').at(-1);
+    return target.hostname==='graph.facebook.com'?Response.json({url:'https://lookaside.fbsbx.com/'+id,mime_type:'application/pdf'}):new Response(bytes[id]);
+  };
+  try{
+    const admin=session(f,f.users.owner),outsider=session(f,f.users.intake),id=addPilot(f);
+    assert.equal((await prepare(f,admin)).status,200);assert.equal((await enable(f,admin,id)).status,200);
+    await inbound(f,'first-before-file','السلام عليكم');await f.app.agentTick();
+    const link=new URL(outgoing(f)[0].body.split('\n').at(-1));
+    const lead=f.db.prepare('SELECT id FROM leads').get();
+    const pushFile=async(mediaId,name)=>{
+      const payload=f.payload('whatsapp','file-'+mediaId,'',pilotPhone.slice(1));
+      Object.assign(payload.entry[0].changes[0].value.messages[0],{type:'document',document:{id:mediaId,filename:name}});
+      assert.equal((await f.post('whatsapp',payload)).status,200);f.drain();
+      await processMediaJob(f.db,{...f.app.config,autoMedia:false},mediaTransport,f.key);
+    };
+    const listing=endpoint+'/leads/'+lead.id+'/documents';
+    await pushFile('11','original.pdf');await pushFile('12','second.pdf');
+    assert.equal(count(f,'attachments'),2);assert.equal(count(f,'app_records'),0);
+    assert.equal((await request(f,listing,admin)).data.length,2);
+    assert.equal((await request(f,listing,outsider)).status,404);
+    const file=(number,name)=>({name,mime:'application/pdf',content:Buffer.from(bytes[number]).toString('base64')});
+    const submitted=f.registration({phone:pilotPhone,link_token:link.searchParams.get('client'),enquiry_lead_id:lead.id,registration_scope:'whatsapp',
+      files:[file(11,'from-form.pdf'),file(14,'form-only.pdf'),file(14,'renamed.pdf')]});
+    assert.equal((await request(f,'/public/registrations',{},submitted)).status,201);
+    assert.equal(count(f,'attachments'),4);
+    const registration=f.db.prepare('SELECT id,admission_id,student_id,lead_id FROM intake_registrations').get();
+    const registeredFiles='/api/intake/'+registration.id+'/files';
+    assert.equal((await request(f,registeredFiles,admin)).data.length,4);
+    f.db.prepare("UPDATE leads SET stage='won' WHERE id=?").run(lead.id);
+    await pushFile('13','different-name.pdf');await pushFile('14','same-as-form.pdf');
+    assert.equal(count(f,'attachments'),4);assert.equal(count(f,'leads'),1);assert.equal(count(f,'intake_registrations'),1);
+    assert.equal((await request(f,registeredFiles,admin)).data.length,4);
+    assert.equal((await request(f,listing,admin)).data.length,3);
+    const conversation=f.db.prepare('SELECT id FROM conversations').get();
+    const messages=(await request(f,'/api/conversations/'+conversation.id+'/messages',admin)).data;
+    assert.equal(messages.find(m=>m.provider_id==='file-13').attachment_id,messages.find(m=>m.provider_id==='file-11').attachment_id);
+    assert.equal(f.db.prepare("SELECT COUNT(*) n FROM tasks WHERE title LIKE '%مستندات واردة%'").get().n,1);
+    f.db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(uid(),id,'Another request for the same guardian','new',0,f.users.assigned.id,'{}',now(),now());
+    await pushFile('15','needs-review.pdf');
+    assert.equal((await request(f,registeredFiles,admin)).data.length,4);
+    assert.equal((await request(f,listing,admin)).data.length,4);
   }finally{await f.close();}
 });
 
