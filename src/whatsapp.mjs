@@ -86,7 +86,7 @@ export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
               const template=db.prepare("SELECT body FROM reply_templates WHERE id='social_welcome'").get();
               const priorRegistration=db.prepare('SELECT 1 FROM intake_registrations WHERE contact_id=? LIMIT 1').get(contact.id);
               const link=firstContactMessage&&!priorRegistration&&/^https?:\/\//.test(origin)?registrationLink(contact.id,'whatsapp',key,origin):'';
-              const welcome='استلمنا رسالتك. فريقنا هيتابع معك.';
+              const welcome='استلمنا رسالتك. ده رد آلي لتأكيد الاستلام، وفريقنا هيتابع معك.';
               const body=lookup?lookup.body+(lookup.registration&&link?'\nإذا لم تقدم طلبًا بعد، أكمل نموذج التسجيل: '+link:''):link?renderReply(template?.body||welcome,{registration_url:link}):welcome;
               const replyId=uid();
               db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
