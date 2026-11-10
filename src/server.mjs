@@ -26,6 +26,7 @@ import {handleMarketing,processMarketingJobs,processMarketingPlans,recoverMarket
 import {handleCommunication} from './communication.mjs';
 import {canViewContactDetails,projectCustomerResponse,assertSafeStaffWrite} from './privacy.mjs';
 import {handleCustomerWorkspace,recoverCustomerEmailJobs,processCustomerEmail} from './customer-workspace.mjs';
+import {handleCustomerAgent,processCustomerAgent,recoverCustomerAgent} from './customer-agent.mjs';
 import {handleAssistant} from './assistant.mjs';
 import {extraAccountConfigs,resolveWhatsAppConfig} from './accounts.mjs';
 import {handleBackupMachine,backupDiagnostics} from './backup-routes.mjs';
@@ -54,6 +55,7 @@ export function createApp(options = {}) {
     db.prepare("INSERT OR IGNORE INTO settings VALUES('crm.claim_enabled','1')").run();
   }
   recoverCustomerEmailJobs(db);
+  recoverCustomerAgent(db);
   recoverMarketingJobs(db);
   let config = effectiveConfig(db,env,secretKey);
   if(config.phoneId)db.prepare("INSERT OR IGNORE INTO wa_thread_accounts SELECT v.id,?,MAX(m.created_at) FROM conversations v JOIN messages m ON m.conversation_id=v.id LEFT JOIN message_accounts a ON a.message_id=m.id WHERE m.direction='in' AND a.message_id IS NULL GROUP BY v.id").run(String(config.phoneId));
@@ -137,7 +139,7 @@ export function createApp(options = {}) {
           res.end(readFileSync(join(publicDir,page?'enquire.html':'enquire.js')));return;
         }
         if(path==='/phone-lib.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(readFileSync(new URL('../node_modules/libphonenumber-js/bundle/libphonenumber-min.js',import.meta.url)));return;}
-        const assets={'/student-records.js':['student-records.js','text/javascript; charset=utf-8'],'/student-records.css':['student-records.css','text/css; charset=utf-8'],'/navigation.css':['navigation.css','text/css; charset=utf-8'],'/record-views.js':['record-views.js','text/javascript; charset=utf-8'],'/record-views.css':['record-views.css','text/css; charset=utf-8'],'/record-messenger.js':['record-messenger.js','text/javascript; charset=utf-8'],'/chat-ui.js':['chat-ui.js','text/javascript; charset=utf-8'],'/chat.css':['chat.css','text/css; charset=utf-8'],'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
+        const assets={'/customer-agent.js':['customer-agent.js','text/javascript; charset=utf-8'],'/student-records.js':['student-records.js','text/javascript; charset=utf-8'],'/student-records.css':['student-records.css','text/css; charset=utf-8'],'/navigation.css':['navigation.css','text/css; charset=utf-8'],'/record-views.js':['record-views.js','text/javascript; charset=utf-8'],'/record-views.css':['record-views.css','text/css; charset=utf-8'],'/record-messenger.js':['record-messenger.js','text/javascript; charset=utf-8'],'/chat-ui.js':['chat-ui.js','text/javascript; charset=utf-8'],'/chat.css':['chat.css','text/css; charset=utf-8'],'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
@@ -182,6 +184,7 @@ export function createApp(options = {}) {
         res.setHeader('Set-Cookie',`me_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${production?'; Secure':''}`);
         sendJson(res,200,{ok:true});return;
       }
+      if(await handleCustomerAgent({db,user,path,method,req,res,jsonBody,sendJson,env,config,transport}))return;
       if(await handleCrmInbox({db,user,path,method,req,res,jsonBody,sendJson}))return;
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
       if(path==='/api/operations/storage'&&method==='GET'){sendJson(res,200,backupDiagnostics(db,user,env));return;}
@@ -397,12 +400,19 @@ export function createApp(options = {}) {
   server.requestTimeout=120000;
   const tick=async()=>{
     if(sending||env.RECOVERY_MODE==='1')return;sending=true;
-    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,transport);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,transport,secretKey);await sendSocialNext(db,secretKey,transport);await processMediaJob(db,config,transport,secretKey);}catch(error){options.onError?.(error);}finally{sending=false;}
+    try{config=effectiveConfig(db,env,secretKey);processWebhookQueue(db,config,origin,secretKey,env);processSocialEvents(db,secretKey,origin);processWorkflowJobs(db);await maybeSyncTemplates(db,config,transport);await processIntakeDelivery(db,config,secretKey,origin);await sendNext(db,config,transport,secretKey,env);await sendSocialNext(db,secretKey,transport);await processMediaJob(db,config,transport,secretKey);}catch(error){options.onError?.(error);}finally{sending=false;}
   };
   let marketingBusy=false,planChecked=0;const marketingTick=async()=>{if(marketingBusy||env.RECOVERY_MODE==='1')return;marketingBusy=true;try{const cfg=effectiveConfig(db,env,secretKey);if(Date.now()-planChecked>60000){processMarketingPlans(db,secretKey,cfg,origin);planChecked=Date.now();}await processMarketingJobs(db,secretKey,cfg,origin,transport);}catch(error){options.onError?.(error);}finally{marketingBusy=false;}};
   let backupBusy=false;const backupTick=async()=>{if(backupBusy||env.RECOVERY_MODE==='1')return;backupBusy=true;try{await maybeSnapshot(db,secretKey,env);}catch(error){options.onError?.(error);}finally{backupBusy=false;}};
   let emailBusy=false;const emailTick=async()=>{if(emailBusy||env.RECOVERY_MODE==='1')return;emailBusy=true;try{await processCustomerEmail(db,secretKey,smtpTransportFactory);}catch(error){options.onError?.(error);}finally{emailBusy=false;}};
-  return {server,db,tick,marketingTick,emailTick,backupTick,get config(){return config;}};
+  let agentBusy=false;
+  const agentTick=async()=>{
+    if(agentBusy||env.RECOVERY_MODE==='1')return;
+    agentBusy=true;
+    try{await processCustomerAgent(db,env,transport);}catch(error){options.onError?.(error);}
+    finally{agentBusy=false;}
+  };
+  return {server,db,tick,marketingTick,emailTick,backupTick,agentTick,get config(){return config;}};
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   process.umask(0o077);
@@ -420,6 +430,7 @@ if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))
   const marketingTimer=setInterval(app.marketingTick,10000);marketingTimer.unref();
   const backupTimer=setInterval(app.backupTick,30000);backupTimer.unref();
   const emailTimer=setInterval(app.emailTick,5000);emailTimer.unref();
-  const stop=()=>{clearInterval(timer);clearInterval(marketingTimer);clearInterval(backupTimer);clearInterval(emailTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
+  const agentTimer=setInterval(app.agentTick,3500);agentTimer.unref();
+  const stop=()=>{clearInterval(agentTimer);clearInterval(timer);clearInterval(marketingTimer);clearInterval(backupTimer);clearInterval(emailTimer);app.server.close(()=>{app.db.close();process.exit(0);});setTimeout(()=>process.exit(1),30000).unref();};
   process.on('SIGTERM',stop);process.on('SIGINT',stop);
 }

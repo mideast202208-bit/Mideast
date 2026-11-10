@@ -1,3 +1,4 @@
+import {pauseCustomerAgent} from './customer-agent.mjs';
 import { transaction } from './db.mjs';
 import { audit,fail,manager,now,owner,text,uid } from './service.mjs';
 import { reassignContactRecords } from './studio.mjs';
@@ -46,6 +47,7 @@ export function prepareReturningIntake(db,contact){
 }
 
 export function transferCrmContact(db,user,contact,next,reason){
+  pauseCustomerAgent(db,contact.id,user);
   moveContactRecords(db,contact.id,next);
   db.prepare('DELETE FROM crm_waiting WHERE contact_id=?').run(contact.id);
   audit(db,user,'assigned','contact',contact.id,{previous_owner_id:contact.owner_id,owner_id:next,reason});
@@ -60,7 +62,7 @@ export function crmFeed(db,user){
     ${management?',l.title,c.name AS contact_name':''}
     FROM crm_waiting q JOIN leads l ON l.id=q.lead_id JOIN contacts c ON c.id=q.contact_id
     WHERE l.stage NOT IN('won','lost') ORDER BY q.created_at,q.lead_id LIMIT 100`).all();
-  const visibility=management?'1=1':'c.owner_id=? OR q.contact_id IS NOT NULL';
+  const visibility=management?'1=1':"c.owner_id=? OR (q.contact_id IS NOT NULL AND a.kind<>'agent_handoff')";
   const scope=management?[]:[user.id];
   const activity=db.prepare(`SELECT a.seq,a.kind,a.source,a.created_at FROM crm_activity a JOIN contacts c ON c.id=a.contact_id
     LEFT JOIN crm_waiting q ON q.contact_id=c.id WHERE (${visibility}) ORDER BY a.seq DESC LIMIT 50`).all(...scope);

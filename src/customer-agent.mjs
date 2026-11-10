@@ -1,0 +1,341 @@
+import {transaction} from './db.mjs';
+import {hash,windowOpen} from './security.mjs';
+import {audit,fail,getContact,manager,now,text,uid} from './service.mjs';
+import {normalizeSearch} from './international.mjs';
+import {agentCandidates,agentCanQualify,agentDecision,agentIntent,agentModel,agentReplies,approvedWebsiteUrl,chooseAgentSource,safeAgentAnswer} from './customer-agent-policy.mjs';
+
+const settingsKey = 'customer_agent.settings';
+const handoffReasons = {
+  finance:'استفسار مالي', human:'طلب موظف أو شكوى', uncertain:'المعلومة تحتاج تحققًا',
+  sensitive:'مستند أو بيانات خاصة', provider:'تعذر تشغيل مزود التصنيف', window:'انتهت نافذة واتساب',
+  staff:'استلام بشري', stop:'طلب إيقاف المتابعة'
+};
+const nextLabels = {certificate:'اسأل عن نوع الشهادة',subject:'اسأل عن التخصص',university:'اسأل عن الجامعة'};
+const defaultSettings = {enabled:false,instructions:'',pilot_contact_id:null,pilot_phone_hash:null,pilot_name:'',pilot_suffix:'',phone_id:null,revision:0};
+
+function settings(db){
+  const row=db.prepare('SELECT value FROM settings WHERE key=?').get(settingsKey);
+  return row?{...defaultSettings,...JSON.parse(row.value)}:{...defaultSettings};
+}
+
+function writeSettings(db,value){
+  db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(settingsKey,JSON.stringify(value));
+}
+
+const nameWords=value=>String(value).trim().split(/\s+/).map(normalizeSearch).filter(Boolean).join(' ');
+
+function pilotCandidates(db,cfg){
+  if(!cfg.pilot_name||!cfg.pilot_suffix)return [];
+  const expected=nameWords(cfg.pilot_name);
+  return db.prepare('SELECT id,name,phone FROM contacts WHERE phone LIKE ?').all('%'+cfg.pilot_suffix)
+    .filter(contact=>{
+      const actual=nameWords(contact.name);
+      return actual===expected||actual.startsWith(expected+' ');
+    });
+}
+
+function providerReady(env){
+  return env.RECOVERY_MODE!=='1'&&env.CUSTOMER_AGENT_OPENAI_APPROVED==='1'&&Boolean(env.CUSTOMER_AGENT_OPENAI_KEY?.trim());
+}
+
+function pilotEligible(db,env,cfg,contact,phoneId){
+  if(!cfg.enabled||!providerReady(env)||!contact||cfg.pilot_contact_id!==contact.id||
+      cfg.phone_id!==phoneId||hash(contact.phone??'')!==cfg.pilot_phone_hash)return false;
+  const matches=pilotCandidates(db,cfg);
+  return matches.length===1&&matches[0].id===contact.id;
+}
+
+function activeSources(db,at=now()){
+  return db.prepare("SELECT id,title,question,answer,url,reviewed_until FROM customer_agent_sources WHERE status='approved' AND reviewed_until>? ORDER BY updated_at DESC LIMIT 100").all(at);
+}
+
+function thread(db,conversationId,phoneId){
+  return db.prepare('SELECT * FROM customer_agent_threads WHERE conversation_id=? AND phone_id=?').get(conversationId,phoneId);
+}
+
+function cancelJobs(db,conversationId,phoneId,reason){
+  db.prepare(`UPDATE messages SET status='blocked',error_code=?
+    WHERE status='queued' AND id IN(SELECT outbound_id FROM customer_agent_jobs
+      WHERE conversation_id=? AND (? IS NULL OR phone_id=?))`).run(reason,conversationId,phoneId,phoneId);
+  db.prepare(`UPDATE customer_agent_jobs SET status='cancelled',reason=?
+    WHERE status IN('queued','planning') AND conversation_id=? AND (? IS NULL OR phone_id=?)`).run(reason,conversationId,phoneId,phoneId);
+}
+
+function invalidateJobs(db){
+  const rows=db.prepare(`SELECT DISTINCT j.conversation_id,j.phone_id FROM customer_agent_jobs j
+    LEFT JOIN messages m ON m.id=j.outbound_id WHERE j.status IN('queued','planning') OR m.status='queued'`).all();
+  for(const row of rows)cancelJobs(db,row.conversation_id,row.phone_id,'AGENT_SETTINGS_CHANGED');
+}
+
+export function recoverCustomerAgent(db){
+  db.prepare("UPDATE customer_agent_jobs SET status='queued' WHERE status='planning'").run();
+}
+
+// Called within the signed inbound event transaction. A unique inbound ID owns one job.
+export function ingestCustomerAgent(db,{env,contact,conversation,lead,messageId,phoneId,body,kind,received}){
+  const cfg=settings(db);
+  const state=thread(db,conversation.id,phoneId);
+  if(state?.state==='stopped')return true;
+  if(cfg.pilot_contact_id!==contact.id||cfg.phone_id!==phoneId)return false;
+  if(agentIntent(body,kind)==='stop'){
+    cancelJobs(db,conversation.id,phoneId,'AGENT_OPT_OUT');
+    db.prepare(`INSERT INTO customer_agent_threads(conversation_id,phone_id,lead_id,state,reason,summary,next_step,updated_at)
+      VALUES(?,?,?,'stopped','stop','طلب العميل إيقاف المتابعة الآلية.','لا متابعة آلية',?)
+      ON CONFLICT(conversation_id,phone_id) DO UPDATE SET state='stopped',reason='stop',summary=excluded.summary,next_step=excluded.next_step,updated_at=excluded.updated_at`).run(conversation.id,phoneId,lead.id,now());
+    audit(db,null,'agent_opt_out','contact',contact.id,{channel:'whatsapp'});
+    return true;
+  }
+  if(state&&['paused','handoff'].includes(state.state))return true;
+  if(!pilotEligible(db,env,cfg,contact,phoneId))return false;
+  if(!windowOpen(received))return true;
+  db.prepare(`INSERT OR IGNORE INTO customer_agent_threads(conversation_id,phone_id,lead_id,state,reason,updated_at)
+    VALUES(?,?,?,'active','',?)`).run(conversation.id,phoneId,lead.id,now());
+  db.prepare(`INSERT OR IGNORE INTO customer_agent_jobs(inbound_id,conversation_id,phone_id,lead_id,status,revision,created_at)
+    VALUES(?,?,?,?,'queued',?,?)`).run(messageId,conversation.id,phoneId,lead.id,cfg.revision,now());
+  return true;
+}
+
+// Also used by the ordinary manual reply and CRM assignment paths.
+export function pauseCustomerAgent(db,contactId,user,phoneId=null){
+  const rows=db.prepare(`SELECT a.* FROM customer_agent_threads a JOIN conversations c ON c.id=a.conversation_id
+    WHERE c.contact_id=? AND (? IS NULL OR a.phone_id=?) AND a.state<>'stopped'`).all(contactId,phoneId,phoneId);
+  for(const row of rows){
+    cancelJobs(db,row.conversation_id,row.phone_id,'AGENT_HUMAN_TAKEOVER');
+    if(row.state==='paused')continue;
+    db.prepare("UPDATE customer_agent_threads SET state='paused',reason='staff',next_step='المتابعة مع الموظف',updated_at=? WHERE conversation_id=? AND phone_id=?").run(now(),row.conversation_id,row.phone_id);
+    audit(db,user,'agent_paused','contact',contactId,{channel:'whatsapp'});
+  }
+}
+
+function safeToProcess(db,env,job,cfg,contact){
+  const current=thread(db,job.conversation_id,job.phone_id);
+  return current?.state==='active'&&job.revision===cfg.revision&&pilotEligible(db,env,cfg,contact,job.phone_id);
+}
+
+export function customerAgentSendAllowed(db,env,messageId){
+  const job=db.prepare(`SELECT j.*,c.id contact_id,c.phone,m.created_at received_at
+    FROM customer_agent_jobs j JOIN conversations v ON v.id=j.conversation_id
+    JOIN contacts c ON c.id=v.contact_id JOIN messages m ON m.id=j.inbound_id
+    WHERE j.outbound_id=?`).get(messageId);
+  if(!job)return true;
+  const current=thread(db,job.conversation_id,job.phone_id),cfg=settings(db);
+  const source=db.prepare('SELECT body FROM messages WHERE id=?').get(messageId)?.body;
+  return job.revision===cfg.revision&&['active','handoff'].includes(current?.state)&&
+    pilotEligible(db,env,cfg,{id:job.contact_id,phone:job.phone},job.phone_id)&&windowOpen(job.received_at)&&
+    safeAgentAnswer(source)&&
+    (job.reason!=='approved_source'||activeSources(db).some(entry=>entry.answer===source));
+}
+
+function saveOutcome(db,job,decision){
+  const row=thread(db,job.conversation_id,job.phone_id);
+  const nextStep=nextLabels[decision.next]||'المتابعة حسب رد العميل';
+  const reasonLabel=handoffReasons[decision.reason];
+  const subject=decision.facts.subject,university=decision.facts.university,certificate=decision.facts.certificate;
+  let summary=[certificate&&'الشهادة: '+certificate,subject&&'التخصص: '+subject,university&&'الجامعة: '+university].filter(Boolean).join(' · ');
+  if(!summary)summary=decision.state==='handled'?'استفسار عام عن خدمات ميدل إيست.':'الاستفسار بحاجة إلى مراجعة بشرية.';
+  let taskId=row.task_id;
+  if(decision.state==='handoff'){
+    const open=taskId&&db.prepare("SELECT id FROM tasks WHERE id=? AND status='open'").get(taskId);
+    if(!open){
+      const lead=db.prepare('SELECT owner_id FROM leads WHERE id=?').get(job.lead_id);
+      const responsible=decision.reason==='finance'
+        ?db.prepare("SELECT id FROM users WHERE active=1 AND role='admin' ORDER BY created_at,id LIMIT 1").get()?.id??lead.owner_id
+        :lead.owner_id;
+      taskId=uid();
+      db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,job.contact_id,job.lead_id,'وكيل خدمة العملاء · '+reasonLabel,new Date(Date.now()+3600000).toISOString(),'open',responsible,now());
+      audit(db,null,'created','task',taskId,{source:'customer_agent',reason:decision.reason});
+      db.prepare("INSERT OR IGNORE INTO crm_activity(kind,event_id,contact_id,lead_id,source,created_at) VALUES('agent_handoff',?,?,?,?,?)")
+        .run(job.inbound_id,job.contact_id,job.lead_id,'whatsapp',now());
+    }
+  }
+  db.prepare(`UPDATE customer_agent_threads SET lead_id=?,state=?,reason=?,facts=?,summary=?,next_step=?,task_id=?,updated_at=?
+    WHERE conversation_id=? AND phone_id=?`).run(job.lead_id,decision.state==='handoff'?'handoff':'active',decision.reason,JSON.stringify(decision.facts),summary,
+      decision.state==='handoff'?'يراجع الموظف المحادثة ويتابع · '+reasonLabel:nextStep,taskId,now(),job.conversation_id,job.phone_id);
+  let outbound=null;
+  if(decision.reply&&safeAgentAnswer(decision.reply)&&windowOpen(job.received_at)){
+    outbound=uid();
+    db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
+      VALUES(?,?,'out','text',?,?,'queued',?)`).run(outbound,job.conversation_id,decision.reply,JSON.stringify({type:'text',text:{body:decision.reply}}),now());
+    db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(outbound,job.phone_id);
+    audit(db,null,'agent_reply','message',outbound,{channel:'whatsapp',reason:decision.reason,source_id:decision.source_id??null});
+  }
+  db.prepare("UPDATE customer_agent_jobs SET status='done',reason=?,outbound_id=? WHERE inbound_id=?").run(decision.reason,outbound,job.inbound_id);
+  audit(db,null,decision.state==='handoff'?'agent_handoff':'agent_handled','lead',job.lead_id,{reason:decision.reason});
+}
+
+export async function processCustomerAgent(db,env,transport){
+  if(!providerReady(env))return;
+  const job=db.prepare(`SELECT j.*,m.body,m.kind,m.created_at received_at,c.id contact_id,c.phone
+    FROM customer_agent_jobs j JOIN messages m ON m.id=j.inbound_id JOIN conversations v ON v.id=j.conversation_id
+    JOIN contacts c ON c.id=v.contact_id WHERE j.status='queued' ORDER BY j.created_at,j.rowid LIMIT 1`).get();
+  if(!job)return;
+  const cfg=settings(db),contact={id:job.contact_id,phone:job.phone};
+  const cancel=reason=>db.prepare("UPDATE customer_agent_jobs SET status='cancelled',reason=? WHERE inbound_id=? AND status IN('queued','planning')").run(reason,job.inbound_id);
+  if(!safeToProcess(db,env,job,cfg,contact)){cancel('AGENT_INACTIVE');return;}
+  if(!db.prepare("UPDATE customer_agent_jobs SET status='planning' WHERE inbound_id=? AND status='queued'").run(job.inbound_id).changes)return;
+  const prior=JSON.parse(thread(db,job.conversation_id,job.phone_id).facts);
+  const active=activeSources(db);
+  let decision;
+  if(!windowOpen(job.received_at)){
+    decision={reason:'window',state:'handoff',facts:prior};
+  }else if(agentIntent(job.body,job.kind)==='lookup'){
+    const candidates=agentCandidates(job.body,active);
+    try{
+      const choice=candidates.length||agentCanQualify(job.body,active)?await chooseAgentSource(job.body,candidates,cfg.instructions,env.CUSTOMER_AGENT_OPENAI_KEY,transport,prior):'uncertain';
+      decision=agentDecision(job.body,job.kind,active,prior,choice);
+    }catch{
+      decision={reason:'provider',state:'handoff',reply:agentReplies.uncertain,facts:prior};
+    }
+  }else{
+    decision=agentDecision(job.body,job.kind,active,prior);
+  }
+  transaction(db,()=>{
+    if(db.prepare('SELECT status FROM customer_agent_jobs WHERE inbound_id=?').get(job.inbound_id).status!=='planning')return;
+    const fresh=db.prepare('SELECT id,phone FROM contacts WHERE id=?').get(job.contact_id);
+    if(!safeToProcess(db,env,job,settings(db),fresh)){cancel('AGENT_INACTIVE');return;}
+    if(decision.source_id&&!activeSources(db).some(source=>source.id===decision.source_id)){
+      decision={reason:'uncertain',state:'handoff',reply:agentReplies.uncertain,facts:prior};
+    }
+    saveOutcome(db,job,decision);
+  });
+}
+
+function updateAgentSettings(db,user,input,env,config){
+  if(typeof input.enabled!=='boolean')fail(400,'اختر حالة الوكيل');
+  const old=settings(db);
+  const instructions=text(input.instructions??old.instructions,'تعليمات الوكيل',1500,false);
+  if(/@|https?:|[\p{N}]{4,}|(?:sk-|bearer\s|api[_ -]?key)/iu.test(instructions))fail(400,'استخدم تعليمات عامة من دون بيانات شخصية أو أرقام تعريف');
+  const pilotName=text(input.pilot_name??old.pilot_name,'اسم صاحب رقم الاختبار',120,false);
+  const suffixInput=text(input.pilot_suffix??old.pilot_suffix,'نهاية رقم الاختبار',6,false);
+  if((pilotName||suffixInput)&&(!/^[0-9٠-٩۰-۹]{2,6}$/.test(suffixInput)||nameWords(pilotName).split(' ').length<2))fail(400,'أدخل اسم الاختبار من كلمتين على الأقل وآخر رقمين إلى ستة أرقام');
+  const pilotSuffix=normalizeSearch(suffixInput);
+  const scopeChanged=pilotName!==old.pilot_name||pilotSuffix!==old.pilot_suffix;
+  const value={...old,enabled:input.enabled,instructions,pilot_name:pilotName,pilot_suffix:pilotSuffix,revision:old.revision+1};
+  if(scopeChanged)Object.assign(value,{pilot_contact_id:null,pilot_phone_hash:null,phone_id:null});
+  if(input.enabled){
+    if(scopeChanged)fail(409,'احفظ نطاق الاختبار أولًا ثم اختر السجل المطابق');
+    if(!providerReady(env))fail(409,'التجربة الحية تحتاج موافقة تفعيل مزود التصنيف وإعداداته على الخادم');
+    const candidates=pilotCandidates(db,value);
+    if(candidates.length!==1)fail(409,candidates.length?'أكثر من سجل يطابق اسم ورقم الاختبار. يلزم تحديد السجل الصحيح قبل التفعيل.':'لم يُعثر على سجل اختبار مطابق');
+    const [contact]=candidates;
+    if(input.pilot_contact_id!==contact.id)fail(400,'راجع واختر سجل الاختبار المؤكد');
+    if(!config.phoneId||!config.accessToken||!/^v\d+\.\d+$/.test(config.version||''))fail(409,'إعداد قناة واتساب الرئيسية غير مكتمل');
+    Object.assign(value,{pilot_contact_id:contact.id,pilot_phone_hash:hash(contact.phone),phone_id:String(config.phoneId)});
+  }
+  transaction(db,()=>{
+    writeSettings(db,value);
+    invalidateJobs(db);
+    audit(db,user,'agent_settings_changed','customer_agent','settings',{enabled:value.enabled,revision:value.revision});
+  });
+}
+
+function updateSource(db,user,input){
+  const id=input.id?text(input.id,'المصدر',80):uid();
+  const previous=db.prepare('SELECT * FROM customer_agent_sources WHERE id=?').get(id);
+  if(input.id&&!previous)fail(404,'المصدر غير متاح');
+  const status=input.status??'draft';
+  if(!['draft','approved','disabled'].includes(status))fail(400,'حالة المصدر غير صالحة');
+  const title=text(input.title??previous?.title,'عنوان المصدر',160);
+  const question=text(input.question??previous?.question,'السؤال',250);
+  const answer=text(input.answer??previous?.answer,'الإجابة',600);
+  const url=text(input.url??previous?.url??'','رابط الموقع',300,false);
+  if(url&&!approvedWebsiteUrl(url))fail(400,'أضف رابطًا عامًا من موقع ميدل إيست الرسمي');
+  const reviewedUntil=input.reviewed_until?new Date(input.reviewed_until):null;
+  if(status==='approved'&&(!safeAgentAnswer(answer)||!reviewedUntil||!(reviewedUntil.getTime()>Date.now())||reviewedUntil.getTime()>Date.now()+180*86400000)){
+    fail(400,'الاعتماد يحتاج إجابة آمنة بلا أسعار أو بيانات شخصية، وتاريخ مراجعة خلال مئة وثمانين يومًا');
+  }
+  transaction(db,()=>{
+    db.prepare(`INSERT INTO customer_agent_sources VALUES(?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title,question=excluded.question,answer=excluded.answer,url=excluded.url,
+      reviewed_until=excluded.reviewed_until,reviewed_at=excluded.reviewed_at,reviewed_by=excluded.reviewed_by,status=excluded.status,updated_at=excluded.updated_at`)
+      .run(id,title,question,answer,url,status==='approved'?reviewedUntil.toISOString():null,status==='approved'?now():null,status==='approved'?user.id:null,status,now());
+    const current=settings(db);
+    writeSettings(db,{...current,revision:current.revision+1});
+    invalidateJobs(db);
+    audit(db,user,'agent_source_'+status,'customer_agent',id);
+  });
+  return {id};
+}
+
+function agentDashboard(db,env){
+  const cfg=settings(db);
+  const candidates=pilotCandidates(db,cfg).map(row=>({id:row.id,name:row.name,suffix:cfg.pilot_suffix}));
+  const sources=db.prepare(`SELECT s.*,u.name reviewer FROM customer_agent_sources s
+    LEFT JOIN users u ON u.id=s.reviewed_by ORDER BY s.updated_at DESC LIMIT 100`).all();
+  const threads=db.prepare(`SELECT a.*,v.contact_id,c.name,l.title,
+    (SELECT m.status FROM customer_agent_jobs j JOIN messages m ON m.id=j.outbound_id
+      WHERE j.conversation_id=a.conversation_id AND j.phone_id=a.phone_id ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) delivery_status,
+    (SELECT m.error_code FROM customer_agent_jobs j JOIN messages m ON m.id=j.outbound_id
+      WHERE j.conversation_id=a.conversation_id AND j.phone_id=a.phone_id ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) delivery_error
+    FROM customer_agent_threads a JOIN conversations v ON v.id=a.conversation_id JOIN contacts c ON c.id=v.contact_id
+    JOIN leads l ON l.id=a.lead_id ORDER BY a.updated_at DESC LIMIT 100`).all();
+  const metrics=db.prepare(`SELECT COUNT(*) conversations,COUNT(DISTINCT CASE WHEN EXISTS(SELECT 1 FROM audit x WHERE x.entity='contact' AND x.entity_id=c.id AND x.action='whatsapp_created'
+      AND x.created_at>=(SELECT MIN(j.created_at) FROM customer_agent_jobs j WHERE j.conversation_id=a.conversation_id)) THEN c.id END) new_customers,
+    COUNT(DISTINCT CASE WHEN t.status='open' THEN a.lead_id END) followups,
+    SUM(CASE WHEN a.state='handoff' THEN 1 ELSE 0 END) handoffs
+    FROM customer_agent_threads a JOIN conversations v ON v.id=a.conversation_id JOIN contacts c ON c.id=v.contact_id
+    LEFT JOIN tasks t ON t.id=a.task_id`).get();
+  const reasons=db.prepare("SELECT reason,COUNT(*) count FROM customer_agent_jobs WHERE reason<>'' GROUP BY reason ORDER BY count DESC").all();
+  const history=db.prepare(`SELECT a.action,a.entity_id,a.metadata,a.created_at,u.name actor FROM audit a
+    LEFT JOIN users u ON u.id=a.user_id WHERE a.entity='customer_agent' ORDER BY a.created_at DESC,a.rowid DESC LIMIT 40`).all();
+  return {enabled:cfg.enabled,provider_ready:providerReady(env),model:agentModel,instructions:cfg.instructions,
+    pilot_contact_id:cfg.pilot_contact_id,pilot_name:cfg.pilot_name,pilot_suffix:cfg.pilot_suffix,candidates,sources,threads,metrics,reasons,history};
+}
+
+export async function handleCustomerAgent({db,user,path,method,req,res,jsonBody,sendJson,env,config,transport}){
+  if(!path.startsWith('/api/customer-agent'))return false;
+  const respond=(value,status=200)=>{sendJson(res,status,value);return true;};
+  const contactRoute=path.match(/^\/api\/customer-agent\/contacts\/([a-f0-9-]{36})$/i);
+  if(contactRoute){
+    if(user.role==='accountant')fail(403,'متابعة الوكيل لفريق خدمة العملاء');
+    const contact=getContact(db,user,contactRoute[1]);
+    if(!manager(user)&&db.prepare('SELECT 1 FROM crm_waiting WHERE contact_id=?').get(contact.id))fail(404,'استلم الفرصة أولًا');
+    if(method==='GET'){
+      const state=db.prepare(`SELECT a.state,a.reason,a.summary,a.next_step,a.lead_id,a.updated_at
+        FROM customer_agent_threads a JOIN conversations v ON v.id=a.conversation_id WHERE v.contact_id=?
+        ORDER BY a.updated_at DESC LIMIT 1`).get(contact.id);
+      return respond(state??null);
+    }
+    if(method==='PATCH'){
+      const input=await jsonBody(req);
+      if(input.action==='pause'){
+        transaction(db,()=>pauseCustomerAgent(db,contact.id,user));
+      }else if(input.action==='resume'&&user.role==='admin'){
+        const cfg=settings(db),conversation=db.prepare('SELECT id FROM conversations WHERE contact_id=?').get(contact.id);
+        if(!conversation||!pilotEligible(db,env,cfg,contact,cfg.phone_id))fail(409,'المحادثة ليست ضمن تجربة واتساب المفعلة');
+        const result=db.prepare("UPDATE customer_agent_threads SET state='active',reason='',next_step='انتظار رسالة جديدة',updated_at=? WHERE conversation_id=? AND phone_id=? AND state IN('paused','handoff')").run(now(),conversation.id,cfg.phone_id);
+        if(!result.changes)fail(409,'يتعذر استئناف المحادثة. يظل إيقاف العميل نافذًا.');
+        audit(db,user,'agent_resumed','contact',contact.id,{channel:'whatsapp'});
+      }else fail(400,'الإجراء غير متاح');
+      return respond({ok:true});
+    }
+  }
+  if(user.role!=='admin')fail(403,'إدارة وكيل خدمة العملاء للمالك');
+  if(path==='/api/customer-agent'&&method==='GET')return respond(agentDashboard(db,env));
+  if(path==='/api/customer-agent/settings'&&method==='PATCH'){
+    updateAgentSettings(db,user,await jsonBody(req),env,config);
+    return respond(agentDashboard(db,env));
+  }
+  if(path==='/api/customer-agent/sources'&&method==='POST')return respond(updateSource(db,user,await jsonBody(req)),201);
+  if(path==='/api/customer-agent/preview'&&method==='POST'){
+    const input=await jsonBody(req);
+    const body=text(input.body,'رسالة اختبار اصطناعية',1600);
+    const sourceList=activeSources(db);
+    const candidates=agentCandidates(body,sourceList);
+    const qualifies=agentCanQualify(body,sourceList);
+    let choice=candidates.length?undefined:qualifies?'qualify':'uncertain';
+    if(input.provider===true){
+      if(!providerReady(env))fail(409,'اختبار المزود يحتاج موافقة وإعداد الخادم');
+      if(input.synthetic!==true)fail(400,'أكد أن رسالة الاختبار وتعليماتها اصطناعية');
+      const instructions=text(input.instructions??settings(db).instructions,'تعليمات الاختبار',1500,false);
+      if(/@|https?:|[\p{N}]{4,}|(?:sk-|bearer\s|api[_ -]?key)/iu.test(instructions))fail(400,'أزل البيانات الشخصية من تعليمات الاختبار');
+      if(agentIntent(body)==='lookup'&&(candidates.length||qualifies)){
+        try{choice=await chooseAgentSource(body,candidates,instructions,env.CUSTOMER_AGENT_OPENAI_KEY,transport);}
+        catch{fail(502,'تعذّر اختبار مزوّد التصنيف');}
+        return respond({...agentDecision(body,'text',sourceList,{},choice),mode:'provider_preview'});
+      }
+    }
+    return respond({...agentDecision(body,'text',sourceList,{},choice),mode:'local_policy'});
+  }
+  fail(404,'مسار وكيل خدمة العملاء غير متاح');
+}
