@@ -10,7 +10,14 @@ export async function startupPreflight(env){
  const db=new DatabaseSync(path,{readOnly:true});
  try{
   if(db.prepare('PRAGMA quick_check').get().quick_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('DATABASE_PREFLIGHT_INTEGRITY_FAILED');
-  const version=db.prepare('SELECT MAX(version) n FROM schema_versions').get().n;if(version>LATEST_SCHEMA_VERSION)throw new Error('DATABASE_NEWER_THAN_APPLICATION');
+  const version=db.prepare('SELECT MAX(version) n FROM schema_versions').get().n;
+  if(version>LATEST_SCHEMA_VERSION){
+   // The CRM release only adds these tables and optional Studio fields. Keep
+   // them intact when serving the previous application during a rollback.
+   const tables=version===10?['quick_enquiries']:version===11?['quick_enquiries','crm_waiting','crm_activity']:[];
+   const exists=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?");
+   if(!tables.length||tables.some(name=>!exists.get(name)))throw new Error('DATABASE_NEWER_THAN_APPLICATION');
+  }
   const keyPath=env.KEY_PATH||resolve(dirname(path),'server.key'),key=env.APP_ENCRYPTION_KEY?Buffer.from(env.APP_ENCRYPTION_KEY,'hex'):existsSync(keyPath)?readFileSync(keyPath):null;
   if(requiresRecoveryKey(db)&&key?.length!==32)throw new Error('EXISTING_DATABASE_RECOVERY_KEY_MISSING');
   if(env.REQUIRE_PERSISTENT_STORAGE==='1'){
