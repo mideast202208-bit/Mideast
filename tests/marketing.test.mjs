@@ -102,14 +102,16 @@ test('recurring plans generate immutable, paired, Cairo-timed slots and safely r
   assert.equal(db.prepare('SELECT COUNT(*) n FROM (SELECT plan_id,revision,local_date,COUNT(*) c FROM marketing_occurrences GROUP BY plan_id,revision,local_date HAVING c>1)').get().n,0);
  }finally{db.close();}
 });
-test('pausing cancels future recurring targets; resume and edits create only one current queue, without replaying old slots',async()=>{
+test('pausing cancels future recurring targets; resume and edits create only one current queue, without replaying old slots',async t=>{
+ // At 20:45 in Cairo, today's 20:00 slot is past but the edited 21:30 slot is available.
+ t.mock.timers.enable({apis:['Date'],now:Date.parse('2027-01-20T18:45:00Z')});
  const f=await recurringFixture(),{db,key,users,base,origin,posts}=f;try{
   const plan=saveMarketingPlan(db,users.admin,planInput(posts.map(p=>p.id)),key,base,origin);setMarketingPlanState(db,users.admin,plan.id,{active:false},key,base,origin);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n,0);assert.equal(marketingPlans(db)[0].state,'paused');
   assert.throws(()=>setMarketingPlanState(db,users.admin,plan.id,{active:true},key,base,origin),e=>e.status===400);
-  setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin);const before=db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n;assert.ok(before>=28);
+  setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin);const before=db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n;assert.equal(before,28);
   setMarketingPlanState(db,users.admin,plan.id,{active:true,publish_ack:true},key,base,origin);assert.equal(db.prepare("SELECT COUNT(*) n FROM marketing_targets WHERE status='scheduled'").get().n,before);
-  saveMarketingPlan(db,users.admin,{...planInput(posts.map(p=>p.id)),local_time:'21:30'},key,base,origin,plan.id);const active=db.prepare("SELECT scheduled_at FROM marketing_targets WHERE status='scheduled'").all();assert.equal(active.length,before);assert.ok(active.every(t=>new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(t.scheduled_at))==='21:30'));
+  saveMarketingPlan(db,users.admin,{...planInput(posts.map(p=>p.id)),local_time:'21:30'},key,base,origin,plan.id);const active=db.prepare("SELECT scheduled_at FROM marketing_targets WHERE status='scheduled'").all();assert.equal(active.length,before+2);assert.equal(active.filter(t=>t.scheduled_at==='2027-01-20T19:30:00.000Z').length,2);assert.ok(active.every(t=>new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(t.scheduled_at))==='21:30'));
  }finally{db.close();}
 });
 test('recurring plans reject unsupported channels, missing media, unsafe access, invalid dates, and unacknowledged activation',async()=>{
