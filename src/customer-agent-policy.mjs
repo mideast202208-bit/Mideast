@@ -11,6 +11,10 @@ export const agentReplies = {
   subject: 'حابب تدرس إيه؟',
   university: 'في جامعة معينة في بالك؟'
 };
+export const agentReplyKeys=['greet','certificate','subject','university','uncertain','finance','human'];
+export const registrationIntro='لو دي أول خطوة ليك، تقدر تكمّل بيانات التقديم هنا:';
+const officeFinance=/المكتب|اتعاب|عموله|باقه|باقات|خصم|استرد|فاتور|عرض سعر|خدمتكم|بتاخدوا|تاخدوا كام|\b(?:office|agency|refund|discount|invoice)\b/i;
+export const officialFeeLabels={application:'رسوم التقديم',ministry:'رسوم القيد للوزارة',university:'باقي رسوم القيد للجامعة',medical:'رسوم التأمين الطبي'};
 
 const finance = /سعر|اسعار|تسعير|رسوم|تكاليف|تكلف|مصروف|اتعاب|خصم|يدفع|الدفع|دفع|ادفع|تحويل بنكي|استرد|فلوس|مبلغ|فاتور|قسط|اقساط|المقدم|مقدم الحجز|تخفيض|مجاني|بكام|بكم|كم التكلفه|ميزانيه|ميزانية|كم الثمن|قد ايه|كم يكلف|دولار|جنيه|يورو|ريال|\b(price|pricing|fees?|costs?|pay|payment|refund|discount|installments?|tuition|free|invoice|usd|egp|eur|sar|aed|dollars?|pounds?|money|how much)\b/i;
 const numbers = /(?:^| )(?:الف|الاف|الفين|\p{L}*مايه|\p{L}*مائه|\p{L}*ميه|مئه|مائتين|مايتين|مئتين|ميتين|مليون|مليار|ملايين|واحد|اثنان|اثنين|اتنين|ثلاثه|اربعه|خمسه|سته|سبعه|ثمانيه|تمانيه|تسعه|عشره|عشرين|ثلاثين|اربعين|خمسين|ستين|سبعين|ثمانين|تسعين)(?: |$)|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|hundred|thousand|million|billion)\b/iu;
@@ -26,6 +30,26 @@ const vocab = new Set(fold('التقديم تقديم اقدم سجل تسجيل
 export function safeAgentAnswer(value){
   return typeof value==='string' && value.trim() && value.length<=600 && !/[\p{N}\p{Sc}@]|https?:|www\.|[\u200B-\u200F\u202A-\u202E\u2060-\u206F]/iu.test(value)
     && !numbers.test(fold(value)) && !finance.test(fold(value)) && !assurance.test(fold(value)) && !personal.test(fold(value));
+}
+
+export function agentAllowsReply(value,forbidden=[]){
+  const normalized=' '+fold(value)+' ';
+  return forbidden.every(phrase=>!normalized.includes(' '+fold(phrase)+' '));
+}
+
+export function officialFeeTopic(body){
+  const input=fold(body);
+  if(officeFinance.test(input))return null;
+  if(/(?:رسوم|تكلفه|كم|كام).*تامين طبي/.test(input))return 'medical';
+  if(/رسوم (?:التقديم|التسجيل الالكتروني)/.test(input))return 'application';
+  if(/رسوم القيد/.test(input)&&/وزاره/.test(input))return 'ministry';
+  if(/رسوم القيد/.test(input)&&/جامعه|تسليم الملف/.test(input))return 'university';
+  return null;
+}
+
+export function officialFeeAnswer(fee){
+  if(!Object.hasOwn(officialFeeLabels,fee?.kind)||!Number.isInteger(fee.amount)||fee.amount<1||fee.amount>999999||!['USD','EGP'].includes(fee.currency))return null;
+  return officialFeeLabels[fee.kind]+' المنشورة: '+fee.amount+' '+(fee.currency==='USD'?'دولار أمريكي':'جنيه مصري')+'. المبلغ يُراجع حسب طلبك والجهة المختصة.';
 }
 
 const generic=new Set(['التقديم','تقديم','مصر','جامعه','الجامعه','الجامعات','جامعات','خدمه','خدمات','مستندات','المستندات','الدراسه','دراسه','study','egypt','universities','university','apply']);
@@ -66,6 +90,11 @@ export function agentCanQualify(body,entries){
   return applying.test(fold(body))&&rankCandidates(body,entries).length===0;
 }
 
+export function requestsAgentRegistration(body){
+  const input=fold(body);
+  return /(?:رابط|لينك|نموذج|استماره) (?:التقديم|التسجيل)|\b(?:application|registration) (?:form|link)\b/.test(input);
+}
+
 export function publicTopic(body){
   return tokens(body).filter(word=>vocab.has(word)).slice(0,24).join(' ');
 }
@@ -89,7 +118,8 @@ export function agentDecision(body,kind,entries,prior={},choice){
   const next=['certificate','subject','university'].find(key=>!facts[key]);
   if(intent==='greet')return {reason:'greet',state:'handled',reply:agentReplies.greet,facts,next:'certificate'};
   if(selected)return {reason:'approved_source',state:'handled',reply:selected.answer,source_id:selected.id,facts,next};
-  if(choice==='qualify'&&next&&agentCanQualify(body,entries))return {reason:'qualify',state:'handled',reply:agentReplies[next],facts,next};
+  if(requestsAgentRegistration(body))return {reason:'registration_link',state:'handled',reply:'أقدر أساعدك تكمّل طلب التقديم.',facts,next};
+  if((choice==='qualify'||choice===undefined)&&next&&(agentCanQualify(body,entries)||Object.keys(facts).some(key=>facts[key]!==prior[key]&&['certificate','subject','university'].includes(key))))return {reason:'qualify',state:'handled',reply:agentReplies[next],facts,next};
   return {reason:'uncertain',state:'handoff',reply:agentReplies.uncertain,facts};
 }
 

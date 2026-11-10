@@ -6,7 +6,8 @@ import { intakeSettings,intakeOwner,channelNames } from './omni-config.mjs';
 import { validateAppData } from './studio.mjs';
 import { claimEnabled,intakeAssignment,prepareReturningIntake,recordCrmIntake } from './crm-inbox.mjs';
 import { queueMessage } from './whatsapp.mjs';
-import { resolveRegistrationLink } from './intake-links.mjs';
+import { resolveRegistrationLink,whatsappRegistrationOpportunity } from './intake-links.mjs';
+import { recordRegistrationDocuments } from './customer-agent.mjs';
 
 import {internationalPhone,nationality} from './international.mjs';
 import {documentTypes} from '../public/documents.js';
@@ -33,7 +34,7 @@ export function cleanIntake(input){
   const level=input.level||'بكالوريوس';if(!['بكالوريوس','ماجستير','دكتوراه','غير دراسي'].includes(level))fail(400,'مرحلة دراسية غير صالحة');
   const result={name,phone,email,source,certificate,academic_year,level,nationality:input.nationality_code?nationality(input.nationality_code):text(input.nationality||'','الجنسية',80,false),university:text(input.university||'أحتاج استشارة','الجامعة',160),faculty:text(input.faculty||'أحتاج استشارة','التخصص',160),notes:text(input.notes||'','الملاحظات',2000,false),campaign:text(input.campaign||'','الحملة',150,false),whatsapp_opt_in:input.whatsapp_opt_in===true};
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(input.request_key||''))fail(400,'مفتاح الطلب غير صالح؛ أعد فتح النموذج');
-  return {...result,...(input.phone_country?{phone_country:input.phone_country}:{}),...(input.nationality_code?{nationality_code:input.nationality_code}:{}),...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{}),...(input.enquiry_lead_id?{enquiry_lead_id:text(input.enquiry_lead_id,'مرجع الاستفسار',36)}:{})};
+  return {...result,...(input.phone_country?{phone_country:input.phone_country}:{}),...(input.nationality_code?{nationality_code:input.nationality_code}:{}),...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{}),...(input.enquiry_lead_id?{enquiry_lead_id:text(input.enquiry_lead_id,'مرجع الاستفسار',36)}:{}),...(input.registration_scope?{registration_scope:text(input.registration_scope,'نطاق التسجيل',20)}:{})};
 }
 function intakeFiles(files=[]){
   if(!Array.isArray(files)||files.length>intakeLimits.maxFiles)fail(400,'بحد أقصى 12 مستندًا');
@@ -66,7 +67,7 @@ export function createRegistration(db,input,key,origin){
   const record={id:uid(),reference:'ME-'+new Date().getUTCFullYear()+'-'+token().slice(0,10).toUpperCase(),created_at:now()};
   const receipt=token(),fileId=uid(),studentId=uid(),admissionId=uid();let leadId=uid();
   transaction(db,()=>{
-    const linkedId=resolveRegistrationLink(clean.link_token,key,clean.enquiry_lead_id);
+    const linkedId=resolveRegistrationLink(clean.link_token,key,clean.enquiry_lead_id,clean.registration_scope);
     const linked=linkedId?db.prepare('SELECT * FROM contacts WHERE id=?').get(linkedId):null;
     if(linkedId&&!linked)fail(400,'رابط العميل غير متاح');
     const byPhone=db.prepare('SELECT * FROM contacts WHERE phone=?').get(clean.phone);
@@ -92,7 +93,7 @@ export function createRegistration(db,input,key,origin){
       AND NOT EXISTS (SELECT 1 FROM quick_enquiries q WHERE q.lead_id=l.id) LIMIT 2`).all(contact.id,assigned.id);
     let existingEnquiry=enquiries.length===1?enquiries[0]:null;
     if(clean.enquiry_lead_id){
-      existingEnquiry=db.prepare(`SELECT l.id,q.source,q.campaign FROM quick_enquiries q JOIN leads l ON l.id=q.lead_id
+      existingEnquiry=clean.registration_scope==='whatsapp'?whatsappRegistrationOpportunity(db,contact.id,clean.enquiry_lead_id):db.prepare(`SELECT l.id,q.source,q.campaign FROM quick_enquiries q JOIN leads l ON l.id=q.lead_id
         WHERE l.id=? AND l.contact_id=? AND l.owner_id=? AND l.stage NOT IN('won','lost')
         AND NOT EXISTS (SELECT 1 FROM intake_registrations r WHERE r.lead_id=l.id)`).get(clean.enquiry_lead_id,contact.id,assigned.id);
       if(!existingEnquiry)fail(409,'رابط الاستكمال لم يعد متاحًا؛ تواصل مع فريق المتابعة');
@@ -119,6 +120,7 @@ export function createRegistration(db,input,key,origin){
       .run(record.id,record.reference,clean.request_key,fingerprint,contact.id,leadId,studentId,admissionId,existingEnquiry?.source??clean.source,existingEnquiry?.campaign??clean.campaign,hash(receipt),encryptSecret(receipt,key),fileId,delivery,null,null,record.created_at);
     if(claimEnabled(db))db.prepare('INSERT OR IGNORE INTO conversations(id,contact_id,created_at) VALUES(?,?,?)').run(uid(),contact.id,now());
     recordCrmIntake(db,{contactId:contact.id,leadId,kind:'registration',eventId:record.id,source:existingEnquiry?.source??clean.source,waiting:Boolean(routing?.waiting)});
+    if(files.length&&clean.registration_scope==='whatsapp')recordRegistrationDocuments(db,contact,leadId,record.id);
     audit(db,null,'registered','intake',record.id,{source:clean.source,contact_created:created,files:files.length});
   });
   return receiptResult(db.prepare('SELECT * FROM intake_registrations WHERE id=?').get(record.id),key,origin,false);

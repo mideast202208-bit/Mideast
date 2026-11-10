@@ -1,5 +1,7 @@
 const states={active:'يديرها الوكيل',handoff:'محولة إلى الفريق',paused:'استلمها موظف',stopped:'المتابعة متوقفة'};
-const reasons={finance:'سؤال مالي',human:'طلب موظف أو شكوى',uncertain:'يحتاج تحققًا',sensitive:'بيانات خاصة أو مرفق',provider:'تعذر التصنيف',window:'انتهت نافذة واتساب',staff:'استلام بشري',stop:'طلب إيقاف المتابعة',greet:'ترحيب',qualify:'تحديد الاحتياج',approved_source:'مصدر معتمد',AGENT_SETTINGS_CHANGED:'تغيّر الإعداد',AGENT_HUMAN_TAKEOVER:'استلام بشري',AGENT_OPT_OUT:'إيقاف بطلب العميل',AGENT_INACTIVE:'الوكيل غير نشط'};
+const reasons={finance:'سؤال مالي',official_fee:'رسوم رسمية معتمدة',registration_link:'رابط تسجيل',documents:'مستندات واردة',human:'طلب موظف أو شكوى',uncertain:'يحتاج تحققًا',sensitive:'بيانات خاصة أو مرفق',provider:'تعذر التصنيف',window:'انتهت نافذة واتساب',staff:'استلام بشري',stop:'طلب إيقاف المتابعة',greet:'ترحيب',qualify:'تحديد الاحتياج',approved_source:'مصدر معتمد',AGENT_SETTINGS_CHANGED:'تغيّر الإعداد',AGENT_HUMAN_TAKEOVER:'استلام بشري',AGENT_DOCUMENT_HANDOFF:'استلام مستندات',AGENT_OPT_OUT:'إيقاف بطلب العميل',AGENT_INACTIVE:'الوكيل غير نشط'};
+const replyLabels={greet:'الترحيب',certificate:'السؤال عن الشهادة',subject:'السؤال عن التخصص',university:'السؤال عن الجامعة',uncertain:'معلومة تحتاج مراجعة',finance:'تحويل السؤال المالي',human:'التحويل لموظف'};
+const feeLabels={application:'رسوم التقديم',ministry:'رسوم القيد للوزارة',university:'باقي رسوم القيد للجامعة',medical:'رسوم التأمين الطبي'};
 const deliveries={queued:'في الطابور',accepted:'قبلتها Meta',sent:'أُرسلت',delivered:'تم التسليم',read:'مقروءة',unknown:'النتيجة غير مؤكدة',failed:'فشل الإرسال',blocked:'توقف الإرسال'};
 const date=value=>value?new Date(value).toLocaleString('ar-EG'):'—';
 
@@ -14,7 +16,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     const scope=d.enabled?'تجربة واتساب محدودة':'متوقف';
     return `<header class="pagehead"><div><h1>وكيل خدمة العملاء الذكي</h1><p class="sub">التعليمات والمعرفة والتجربة وسجل التدخل البشري.</p></div><button type="button" class="btn" data-action="agent-refresh">تحديث</button></header>
     <section class="panel"><h2>التحكم والتجربة</h2><p><b>${e(scope)}</b> · ${d.provider_ready?'إعداد المزود متاح على الخادم':'المزوّد الخارجي غير مفعّل'}</p>
-    <p class="sub">التجربة الحية محصورة في سجل اختبار واحد يحدده المالك ويتحقق منه الخادم. الموقع وفيسبوك وإنستجرام خارج التشغيل الآلي هنا. تُحوَّل الأسئلة المالية للفريق.</p>
+    <p class="sub">التجربة الحية محصورة في سجل واتساب واحد. الرسوم الرسمية تحتاج مصدرًا معتمدًا. أسئلة أتعاب المكتب والمستندات الواردة تتحوّل للإدارة.</p>
     <div class="actions"><button type="button" class="btn primary" data-action="agent-preview">اختبار اصطناعي</button>
     <button type="button" class="btn" data-action="agent-settings">الإعدادات والتعليمات</button>
     ${d.enabled?'<button type="button" class="btn" data-action="agent-stop">إيقاف الوكيل الآن</button>':''}</div></section>
@@ -32,7 +34,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     <button type="button" class="btn small" data-action="agent-chat" data-id="${e(item.contact_id)}">فتح محادثة واتساب</button>
     ${item.state!=='stopped'?'<button type="button" class="btn small" data-action="agent-'+(item.state==='active'?'pause':'resume')+'" data-id="'+e(item.contact_id)+'">'+(item.state==='active'?'استلام المحادثة':'استئناف')+'</button>':''}</div></article>`).join('')||'<p>لا توجد محادثات ضمن تجربة الوكيل بعد.</p>'}</section>
     <div class="grid2"><section class="panel"><h2>أسباب التحويل والإيقاف</h2>
-    ${d.reasons.filter(item=>!['greet','qualify','approved_source'].includes(item.reason)).map(item=>'<p>'+e(reasons[item.reason]||item.reason)+' · '+e(item.count)+'</p>').join('')||'<p>لا توجد حالات مسجلة بعد.</p>'}</section>
+    ${d.reasons.filter(item=>!['greet','qualify','approved_source','official_fee','registration_link'].includes(item.reason)).map(item=>'<p>'+e(reasons[item.reason]||item.reason)+' · '+e(item.count)+'</p>').join('')||'<p>لا توجد حالات مسجلة بعد.</p>'}</section>
     <section class="panel"><h2>سجل التعديلات</h2>${d.history.map(item=>'<p>'+e(({agent_settings_changed:'حُفظت إعدادات الوكيل',agent_source_draft:'حُفظت مسودة',agent_source_approved:'اعتمد مصدر',agent_source_disabled:'أوقف مصدر'})[item.action]||item.action)+' · '+e(item.actor||'النظام')+' · '+e(date(item.created_at))+'</p>').join('')||'<p>لا توجد تعديلات بعد.</p>'}</section></div>`;
   }
 
@@ -61,7 +63,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     if(name==='agent-pause'||name==='agent-resume'){
       const resume=name==='agent-resume';
       await api('/customer-agent/contacts/'+encodeURIComponent(id),'PATCH',{action:resume?'resume':'pause'});
-      const area=document.querySelector('[data-agent-contact]');
+      const area=document.querySelector('dialog[open] [data-agent-contact]');
       if(area)await mount(area,id);
       else{await load();render();}
       toast(resume?'الوكيل ينتظر رسالة جديدة':'تم إيقاف الرد الآلي لهذه المحادثة');
@@ -75,26 +77,44 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     if(name==='agent-settings'){
       const d=dashboard;
       const candidates=d.candidates.length===1?'<option value="'+e(d.candidates[0].id)+'" '+(d.pilot_contact_id===d.candidates[0].id?'selected':'')+'>'+e(d.candidates[0].name)+' · ‎••'+e(d.candidates[0].suffix)+'</option>':'';
-      const form=modal('إعدادات وتعليمات الوكيل',`<label>تعليمات عامة قابلة للتعديل<textarea name="instructions" rows="6" maxlength="1500">${e(d.instructions)}</textarea></label>
-       <p class="sub">اكتب تعليمات عامة عن أسلوب المتابعة ونطاق الإجابة. ممنوع إدخال بيانات عملاء أو أسعار أو رموز وصول.</p>
+      const form=modal('إعدادات وتعليمات الوكيل',`<label>تعليمات عامة للوكيل<textarea name="instructions" rows="4" maxlength="1500">${e(d.instructions)}</textarea></label>
+       <p class="sub">اكتب نطاق الإجابة وكيف يختار المعلومة. لتحديد الكلام الذي يراه العميل اكتب صياغتك في الردود التالية أو في مصدر معرفة معتمد.</p>
+       <details><summary>الردود التي أريد الوكيل يقولها</summary>${Object.entries(replyLabels).map(([key,label])=>'<label>'+e(label)+'<textarea name="reply_'+key+'" rows="2" maxlength="420" placeholder="'+e(d.default_replies[key])+'">'+e(d.replies[key]||'')+'</textarea></label>').join('')}</details>
+       <label>عبارات ممنوع قولها<textarea name="forbidden" rows="4" maxlength="1200" placeholder="اكتب عبارة واحدة في كل سطر">${e(d.forbidden.join('\n'))}</textarea></label>
+       <p class="sub">العبارات الممنوعة تُفحص قبل الإرسال. أضف الرسوم الرسمية من مصادر المعرفة بعد مراجعتها.</p>
        <label>اسم صاحب رقم الاختبار<input name="pilot_name" maxlength="120" value="${e(d.pilot_name)}"></label>
        <label>آخر أرقام الهاتف<input name="pilot_suffix" inputmode="numeric" dir="ltr" maxlength="6" value="${e(d.pilot_suffix)}"></label>
        <p class="sub">احفظ الاسم ونهاية الرقم والوكيل متوقف، ثم ارجع لاختيار السجل المطابق.</p>
        <label>نطاق التجربة<select name="pilot_contact_id"><option value="">اختر السجل المؤكد</option>${candidates}</select></label>
        ${d.candidates.length===1?'':'<p class="sub">التفعيل معلق إلى أن يتوفر تطابق فريد لسجل الاختبار.</p>'}
        <label><input type="checkbox" name="enabled" ${d.enabled?'checked':''} ${d.provider_ready?'':'disabled'}> تشغيل الوكيل على محادثة واتساب التجريبية</label>`);
-      bindForm(form,v=>api('/customer-agent/settings','PATCH',{enabled:v.has('enabled'),instructions:v.get('instructions'),pilot_name:v.get('pilot_name'),pilot_suffix:v.get('pilot_suffix'),pilot_contact_id:v.get('pilot_contact_id')}));
+      bindForm(form,v=>api('/customer-agent/settings','PATCH',{enabled:v.has('enabled'),instructions:v.get('instructions'),forbidden:v.get('forbidden'),replies:Object.fromEntries(Object.keys(replyLabels).map(key=>[key,v.get('reply_'+key)])),pilot_name:v.get('pilot_name'),pilot_suffix:v.get('pilot_suffix'),pilot_contact_id:v.get('pilot_contact_id')}));
       return true;
     }
     if(name==='agent-source'){
       const current=dashboard.sources.find(source=>source.id===id);
       const form=modal(current?'مراجعة مصدر المعرفة':'إضافة مصدر معرفة',`<label>العنوان<input name="title" required maxlength="160" value="${e(current?.title||'')}"></label>
        <label>السؤال أو الكلمات الدالة<input name="question" required maxlength="250" value="${e(current?.question||'')}"></label>
-       <label>الإجابة المعتمدة للعميل<textarea name="answer" rows="5" required maxlength="600">${e(current?.answer||'')}</textarea></label>
        <label>رابط صفحة موقع الشركة (اختياري)<input dir="ltr" name="url" type="url" maxlength="300" value="${e(current?.url||'')}"></label>
-       <label>حالة المصدر<select name="status"><option value="draft">مسودة</option><option value="approved">اعتماد هذه الإجابة بعد مراجعتها</option><option value="disabled">إيقاف</option></select></label>
+       <button type="button" class="btn small" data-agent-website>جلب نص الصفحة للمراجعة</button><p class="sub" data-agent-website-result role="status" style="white-space:pre-wrap" hidden></p>
+       <label>الإجابة المعتمدة للعميل<textarea name="answer" rows="5" maxlength="600">${e(current?.official_fee?'':current?.answer||'')}</textarea></label>
+       <details ${current?.official_fee?'open':''}><summary>إضافة رسم رسمي منشور</summary>
+       <label>بند رسمي<select name="fee_kind"><option value="">إجابة عامة</option>${Object.entries(feeLabels).map(([key,label])=>'<option value="'+key+'" '+(current?.official_fee?.kind===key?'selected':'')+'>'+e(label)+'</option>').join('')}</select></label>
+       <label>المبلغ المنشور<input name="fee_amount" type="number" min="1" max="999999" value="${e(current?.official_fee?.amount||'')}"></label>
+       <label>العملة<select name="fee_currency"><option value="USD">دولار أمريكي</option><option value="EGP" ${current?.official_fee?.currency==='EGP'?'selected':''}>جنيه مصري</option></select></label></details>
+       <label>حالة المصدر<select name="status"><option value="draft">مسودة</option><option value="approved" ${current?.status==='approved'?'selected':''}>اعتماد هذه الإجابة بعد مراجعتها</option><option value="disabled" ${current?.status==='disabled'?'selected':''}>إيقاف</option></select></label>
        <label>صالح للمراجعة حتى<input type="date" name="reviewed_until" value="${e(current?.reviewed_until?.slice(0,10)||'')}"></label>`);
-      bindForm(form,v=>api('/customer-agent/sources','POST',{...Object.fromEntries(v),...(current?{id:current.id}:{})}));
+      const websiteButton=form.querySelector('[data-agent-website]'),websiteResult=form.querySelector('[data-agent-website-result]');
+      websiteButton.addEventListener('click',async()=>{
+        websiteButton.disabled=true;websiteResult.hidden=false;websiteResult.textContent='جارٍ جلب الصفحة…';
+        try{
+          const value=await api('/customer-agent/sources/website-preview','POST',{url:form.elements.url.value});
+          form.elements.url.value=value.url;
+          if(!form.elements.title.value)form.elements.title.value=value.title;
+          websiteResult.textContent=value.excerpt;
+        }catch(error){websiteResult.textContent=error.message;}finally{websiteButton.disabled=false;}
+      });
+      bindForm(form,v=>api('/customer-agent/sources','POST',{title:v.get('title'),question:v.get('question'),answer:v.get('answer'),url:v.get('url'),status:v.get('status'),reviewed_until:v.get('reviewed_until'),official_fee:v.get('fee_kind')?{kind:v.get('fee_kind'),amount:Number(v.get('fee_amount')),currency:v.get('fee_currency')}:null,...(current?{id:current.id}:{})}));
       return true;
     }
     return false;

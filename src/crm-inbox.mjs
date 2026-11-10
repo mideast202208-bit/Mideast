@@ -64,8 +64,8 @@ export function crmFeed(db,user){
     WHERE l.stage NOT IN('won','lost') ORDER BY q.created_at,q.lead_id LIMIT 100`).all();
   const visibility=management?'1=1':"c.owner_id=? OR (q.contact_id IS NOT NULL AND a.kind<>'agent_handoff')";
   const scope=management?[]:[user.id];
-  const activity=db.prepare(`SELECT a.seq,a.kind,a.source,a.created_at FROM crm_activity a JOIN contacts c ON c.id=a.contact_id
-    LEFT JOIN crm_waiting q ON q.contact_id=c.id WHERE (${visibility}) ORDER BY a.seq DESC LIMIT 50`).all(...scope);
+  const activity=db.prepare(`SELECT a.seq,a.kind,a.source,a.created_at${user.role==='admin'?',a.lead_id':''} FROM crm_activity a JOIN contacts c ON c.id=a.contact_id
+    LEFT JOIN crm_waiting q ON q.contact_id=c.id WHERE (${visibility}) AND (a.kind<>'agent_documents' OR ?) ORDER BY a.seq DESC LIMIT 50`).all(...scope,user.role==='admin'?1:0);
   const metrics=management?db.prepare(`SELECT u.id,u.name,
     (SELECT COUNT(*) FROM leads l WHERE l.owner_id=u.id AND l.stage NOT IN('won','lost') AND NOT EXISTS (SELECT 1 FROM crm_waiting w WHERE w.contact_id=l.contact_id)) AS open,
     (SELECT COUNT(*) FROM tasks t WHERE t.owner_id=u.id AND t.status='open' AND t.due_at<? AND NOT EXISTS (SELECT 1 FROM crm_waiting w WHERE w.contact_id=t.contact_id)) AS overdue,

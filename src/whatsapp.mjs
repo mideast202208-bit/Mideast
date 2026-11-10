@@ -76,7 +76,7 @@ export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
             runAutomations(db,'whatsapp.received',contact,messageId);
             recordCrmIntake(db,{contactId:contact.id,leadId:lead.id,kind:'whatsapp',eventId:messageId,source:'whatsapp',waiting:Boolean(routing?.waiting)});
             audit(db,null,'received','message',messageId,{channel:'whatsapp'});
-            if(ingestCustomerAgent(db,{env,contact,conversation,lead,messageId,phoneId:config.phoneId,body,kind,received}))continue;
+            if(ingestCustomerAgent(db,{env,contact,conversation,lead,messageId,phoneId:config.phoneId,body,kind,mediaId:content.id,received}))continue;
             const settings=intakeSettings(db);
             const lookup=windowOpen(received)&&settings.whatsapp_auto_reply&&settings.whatsapp_status_lookup===true&&kind==='text'?whatsappLookupReply(db,contact,phone,body,{firstInbound,conversationId:conversation.id,phoneId:config.phoneId}):null;
             const legacyWelcome=firstInbound&&/^https?:\/\//.test(origin)&&!(settings.whatsapp_status_lookup===true&&kind==='text');
@@ -144,12 +144,12 @@ export function queueMessage(db, user, conversation, input, config) {
   });
   return {id,status:'queued'};
 }
-export async function sendNext(db, baseConfig, transport = fetch,key,env={}) {
+export async function sendNext(db, baseConfig, transport = fetch,key,env={},origin=env.PUBLIC_ORIGIN||env.RENDER_EXTERNAL_URL||'') {
   const message = db.prepare(`SELECT m.*,c.phone,v.last_inbound FROM messages m
     JOIN conversations v ON v.id=m.conversation_id JOIN contacts c ON c.id=v.contact_id
     WHERE m.status='queued' AND m.direction='out' ORDER BY m.created_at LIMIT 1`).get();
   if (!message) return;
-  if(!customerAgentSendAllowed(db,env,message.id)){
+  if(!customerAgentSendAllowed(db,env,message.id,key,origin)){
     db.prepare("UPDATE messages SET status='blocked',error_code='AGENT_POLICY_BLOCKED' WHERE id=?").run(message.id);
     return;
   }
