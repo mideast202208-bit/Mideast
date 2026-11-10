@@ -1,3 +1,4 @@
+import {createCustomerAgent} from './customer-agent.js';
 import {createStudentRecords,filterRecordsBySearch,sectionSearch,updateSectionSearch} from './student-records.js';
 import {createRecordViews} from './record-views.js';
 import {createMarketing} from './marketing.js';
@@ -22,7 +23,12 @@ let hubState=null,selectedSocial=null,socialMessages=[];
 let studioEntity='contact',factorState=null,dragField=null;
 const workspace=createWorkspace({api,escape,modal,bindForm,toast,render,getUser:()=>user,getData:()=>data,getPage:()=>page,getSearch:()=>search,navigate:async target=>{page=target;search='';await load();}});
 const marketing=createMarketing({api,escape,modal,bindForm,toast,render,getUser:()=>user,getData:()=>data,getPage:()=>page,getSearch:()=>search,navigate:async target=>{page=target;search='';await load();}});
-const recordMessenger=createRecordMessenger({api,getUser:()=>user,toast,getTemplates:()=>data?.templates||[],onUpdate:async id=>{const w=await api('/contacts/'+id+'/workspace');const timeline=$('#customer-timeline-panel');if(timeline)timeline.innerHTML='<div class="actions"><button type="button" class="linkbutton" data-action="customer-refresh" data-id="'+id+'">تحديث سجل المتابعة</button></div>'+customerMailHistory(w)+customerTimeline(w);}});
+const recordMessenger=createRecordMessenger({api,getUser:()=>user,toast,getTemplates:()=>data?.templates||[],onUpdate:async id=>{const area=$('[data-agent-contact]');if(area)customerAgent.mount(area,id).catch(()=>{});const w=await api('/contacts/'+id+'/workspace');const timeline=$('#customer-timeline-panel');if(timeline)timeline.innerHTML='<div class="actions"><button type="button" class="linkbutton" data-action="customer-refresh" data-id="'+id+'">تحديث سجل المتابعة</button></div>'+customerMailHistory(w)+customerTimeline(w);}});
+const customerAgent=createCustomerAgent({api,escape,modal,bindForm,toast,render,getUser:()=>user,openLead:showLead,openContact:showContact,
+  openWhatsApp:async accountId=>{
+    const channel=customerWorkspaceState?.channels.find(item=>item.channel==='whatsapp'&&item.account_id===accountId&&item.available);
+    if(channel)await recordMessenger.open(channel);
+  }});
 const recordViews=createRecordViews({getUser:()=>user,getData:()=>data,getStages:()=>stages,formatMoney:money,formatDate:date,sourceName,personName:id=>personName(id)});
 const studentRecords=createStudentRecords({getData:()=>data,getUser:()=>user,getPage:()=>page,api,render,modal,bindForm,toast,navigate:async target=>{page=target;search='';await load();}});
 const isManager = () => ['admin','manager'].includes(user?.role);
@@ -73,10 +79,11 @@ function bindForm(form,handler){form.addEventListener('submit',async event=>{eve
 function login(){
   setNavigation(false);
   recordMessenger.reset();
+  customerAgent.reset();
   clearInterval(refreshTimer);crmInbox=null;crmUnread=0;crmRevision='';refreshCrmPending=false;$('#app').innerHTML=`<main class="login"><div class="loginart"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><h1>كل محادثة،<br>فرصة لبداية جديدة.</h1><p>مساحة واحدة لفريقك، من أول رسالة إلى إتمام الخدمة ومتابعة العميل.</p><div class="badge">الإصدار 0.10</div></div><div class="loginform"><form id="loginform"><h2>أهلًا برجوعك</h2><p class="sub">ادخل حسابك لفتح مساحة عمل ميد إيست.</p><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" required autocomplete="username"><label>كلمة المرور</label><input name="password" type="password" dir="ltr" required autocomplete="current-password"><label>رمز تطبيق المصادقة — لو مفعل</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"><div class="formerror" id="loginerror"></div><button class="btn primary" type="submit">دخول مساحة العمل ←</button><p class="footnote">حساب المدير يُنشأ عند تجهيز السيرفر. لو نسيت كلمة المرور تواصل مع مالك النظام.</p></form></div></main>`;
   $('#loginform').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;try{const result=await api('/login','POST',Object.fromEntries(new FormData(form)));user=result.user;csrf=result.csrf;page=user.role==='accountant'?'finance':'dashboard';await load();startRefresh();}catch(error){$('#loginerror').textContent=error.message;}finally{btn.disabled=false;}});
 }
-async function load(){data=await api('/data');if(user.role!=='accountant'&&(!crmInbox||page==='tickets')){try{await syncCrmInbox();}catch{}if(!user)return;}await studentRecords.load();await workspace.load(page);if(page==='marketing')await marketing.load();if(user.role!=='accountant'&&['dashboard','hub','registrations','social','templates','lab'].includes(page))hubState=await api('/hub');if(page==='integrations')integration=await api('/integrations');render();}
+async function load(){data=await api('/data');if(user.role!=='accountant'&&(!crmInbox||page==='tickets')){try{await syncCrmInbox();}catch{}if(!user)return;}await studentRecords.load();await workspace.load(page);if(page==='marketing')await marketing.load();if(page==='customer-agent'&&user.role==='admin')await customerAgent.load();if(user.role!=='accountant'&&['dashboard','hub','registrations','social','templates','lab'].includes(page))hubState=await api('/hub');if(page==='integrations')integration=await api('/integrations');render();}
 function inboxRevision(value){
   return JSON.stringify([value.activity.map(e=>e.seq),value.waiting.map(e=>e.lead_id),value.waiting_count,value.enabled,value.failures?.map(e=>e.id)]);
 }
@@ -123,7 +130,7 @@ function crmInboxView(){
   const assignButton=id=>'<button class="btn small" data-action="crm-assign" data-id="'+escape(id)+'">تعيين موظف</button>';
   const rows=inbox.waiting.map(q=>'<article class="fieldcard"><div><b>'+escape(q.title||'فرصة واردة')+'</b><p class="sub">'+escape(q.contact_name||'')+' · '+escape(sourceName(q.source)||q.source)+' · '+escape(new Date(q.created_at).toLocaleString('ar-EG'))+'</p>'+(q.due_at&&Date.parse(q.due_at)<Date.now()?badge('متأخرة','red'):'')+'</div><div class="actions"><button class="btn primary small" data-action="crm-claim" data-id="'+escape(q.lead_id)+'">استلام وفتح الفرصة</button>'+(isManager()?assignButton(q.lead_id):'')+'</div></article>').join('');
   const metrics=inbox.metrics.map(u=>'<div class="fieldcard"><b>'+escape(u.name)+'</b><span class="sub">'+u.open+' فرص نشطة · '+u.overdue+' مهام متأخرة · '+u.completed+' مهام مكتملة</span></div>').join('');
-  const kinds={registration:'تسجيل جديد',enquiry:'استفسار جديد',whatsapp:'رسالة واتساب',facebook:'رسالة فيسبوك',instagram:'رسالة إنستجرام',assignment:'تغيير مسؤول المتابعة'};
+  const kinds={agent_handoff:'حالة تحتاج تدخلًا بشريًا',registration:'تسجيل جديد',enquiry:'استفسار جديد',whatsapp:'رسالة واتساب',facebook:'رسالة فيسبوك',instagram:'رسالة إنستجرام',assignment:'تغيير مسؤول المتابعة'};
   const events=inbox.activity.map(e=>'<div class="fieldcard"><b>'+escape(kinds[e.kind]||e.kind)+'</b><small>'+escape(sourceName(e.source)||e.source)+' · '+escape(new Date(e.created_at).toLocaleString('ar-EG'))+'</small></div>').join('');
   return '<section class="panel"><div class="panelhead"><h2>بانتظار الاستلام · '+inbox.waiting_count+'</h2>'+(user.role==='admin'?'<button class="btn small" data-action="crm-toggle">'+(inbox.enabled?'إيقاف إدخال فرص جديدة للصندوق':'تفعيل استقبال الفرص في الصندوق')+'</button>':'')+'</div>'+(rows||empty('لا توجد فرص بانتظار الاستلام','أي استفسار جديد من قناة مربوطة يظهر هنا تلقائيًا.'))+'</section>'+
     (isManager()?'<section class="panel"><h2>متابعة الفريق</h2>'+metrics+'</section>':'')+
@@ -131,9 +138,9 @@ function crmInboxView(){
     '<section class="panel"><h2>آخر التنبيهات الداخلية</h2>'+(events||empty('لا توجد تنبيهات'))+'</section>';
 }
 
-const navigation=[['dashboard','◈','نظرة عامة'],['assistant','◇','مساعد الإدارة'],['communications','◉','مركز التواصل'],['marketing','◉','التسويق الاجتماعي'],['hub','⊞','مركز القنوات'],['registrations','↗','التسجيلات والملفات'],['social','◉','محادثات السوشيال'],['templates','▧','الردود والقوالب'],['lab','⚡','المختبر الافتراضي'],['contacts','♧','العملاء'],['leads','▦','فرص البيع'],['inbox','◉','صندوق المحادثات'],['tickets','▤','خدمة العملاء'],['tasks','☑','المهام والمتابعة'],['quotes','▧','عروض الأسعار'],['finance','↗','الفواتير والتحصيل'],['studio','◇','الاستوديو'],['automations','⚡','الأتمتة'],['users','◎','الفريق والصلاحيات'],['integrations','⊞','الربط والإعدادات'],['audit','≡','سجل العمليات'],['security','◇','أمان الحساب'],['operations','⊙','جاهزية التشغيل']];
+const navigation=[['dashboard','◈','نظرة عامة'],['assistant','◇','مساعد الإدارة'],['customer-agent','◇','وكيل خدمة العملاء الذكي'],['communications','◉','مركز التواصل'],['marketing','◉','التسويق الاجتماعي'],['hub','⊞','مركز القنوات'],['registrations','↗','التسجيلات والملفات'],['social','◉','محادثات السوشيال'],['templates','▧','الردود والقوالب'],['lab','⚡','المختبر الافتراضي'],['contacts','♧','العملاء'],['leads','▦','فرص البيع'],['inbox','◉','صندوق المحادثات'],['tickets','▤','خدمة العملاء'],['tasks','☑','المهام والمتابعة'],['quotes','▧','عروض الأسعار'],['finance','↗','الفواتير والتحصيل'],['studio','◇','الاستوديو'],['automations','⚡','الأتمتة'],['users','◎','الفريق والصلاحيات'],['integrations','⊞','الربط والإعدادات'],['audit','≡','سجل العمليات'],['security','◇','أمان الحساب'],['operations','⊙','جاهزية التشغيل']];
 function renderNavigation(allowed){
- const groups=[['يوم العمل والتواصل',['dashboard','assistant','communications','marketing','registrations','contacts','tasks','leads','tickets','templates']],['المبيعات والحسابات',['quotes','finance']],['ملفات الخدمات',allowed.filter(n=>n[0].startsWith('app:')).map(n=>n[0])],['أدوات القنوات',['hub','social','inbox']],['الإدارة والأمان',['studio','automations','users','integrations','audit','security','operations','lab']]];
+ const groups=[['يوم العمل والتواصل',['dashboard','assistant','communications','marketing','registrations','contacts','tasks','leads','tickets','customer-agent','templates']],['المبيعات والحسابات',['quotes','finance']],['ملفات الخدمات',allowed.filter(n=>n[0].startsWith('app:')).map(n=>n[0])],['أدوات القنوات',['hub','social','inbox']],['الإدارة والأمان',['studio','automations','users','integrations','audit','security','operations','lab']]];
  return groups.map(([title,keys],i)=>{const items=allowed.filter(n=>keys.includes(n[0]));if(!items.length)return '';const buttons=items.map(([key,_,label])=>'<button class="nav '+(page===key?'active':'')+'" data-page="'+key+'" '+(page===key?'aria-current="page"':'')+'><span class="icon">'+brandIcon(key.startsWith('app:')?'services':key)+'</span>'+escape(label)+'</button>').join('');return i<3?'<div class="navlabel">'+title+'</div>'+buttons:'<details class="nav-group" '+(items.some(n=>n[0]===page)?'open':'')+'><summary>'+title+'</summary>'+buttons+'</details>';}).join('');
 }
 function mobileNavigation(){return typeof window!=='undefined'&&(window.matchMedia?.('(max-width:800px)')?.matches||(window.innerWidth>0&&window.innerWidth<=800));}
@@ -153,7 +160,7 @@ function focusCurrentPage(){const title=$('#content h1');title?.setAttribute?.('
 function render(){
   stages=Object.fromEntries(data.pipeline.map(s=>[s.stage_key,s.label]));
   const allNav=[...navigation,...data.apps.map(a=>['app:'+a.id,'▣',a.app_key==='me_documents'?'مستندات الطلاب':a.name])];
-  const allowed=allNav.filter(([key])=>!(['studio','automations','integrations','audit','operations','hub','templates','lab','assistant','marketing'].includes(key)&&!isManager()) && !(key==='users'&&user.role!=='admin') && !(key==='finance'&&!canFinance()) && !(user.role==='accountant'&&!['finance','security','quotes'].includes(key)));
+  const allowed=allNav.filter(([key])=>!(['studio','automations','integrations','audit','operations','hub','templates','lab','assistant','marketing'].includes(key)&&!isManager()) && !(['users','customer-agent'].includes(key)&&user.role!=='admin') && !(key==='finance'&&!canFinance()) && !(user.role==='accountant'&&!['finance','security','quotes'].includes(key)));
   if(!allowed.some(([key])=>key===page))page=allowed[0][0];
   $('#app').innerHTML=`<div class="shell${navigationOpen?' navigation-open':''}"><button class="navigation-overlay" type="button" data-navigation-overlay aria-label="إغلاق القائمة الرئيسية" tabindex="-1" ${navigationOpen?'':'hidden'}></button><aside class="sidebar" id="primary-navigation-sidebar" aria-label="القائمة الرئيسية"><div class="sidebar-heading"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><button class="navigation-close" type="button" data-navigation-close aria-label="إغلاق القائمة الرئيسية">×</button></div><div class="sidebar-search"><label for="search">بحث في الصفحة الحالية</label><div>${brandIcon('search',17)}<input class="search" id="search" placeholder="بحث في الصفحة…" value="${escape(search)}" aria-label="بحث في الصفحة"></div></div><nav class="primary-navigation" aria-label="صفحات المنصة">${renderNavigation(allowed)}</nav><div class="sidebar-bottom"><div class="userline"><span class="avatar">${escape(user.name.slice(0,1))}</span><div>${escape(user.name)}<small>${roles[user.role]}</small></div></div><button class="nav" data-action="logout">خروج من الحساب</button><div class="statusnote">مساحة عمل مستقلة<br>مساحة العمل · 0.10</div></div></aside><main class="main" id="workspace-main"><header class="topbar"><button type="button" class="navigation-toggle" data-navigation-toggle aria-controls="primary-navigation-sidebar" aria-expanded="${navigationOpen}">${brandIcon('list',21)}<span>القائمة الرئيسية</span></button><div class="breadcrumb"><span>${escape(data.settings.company_name || 'ميد إيست')}</span><b>${escape(allNav.find(n=>n[0]===page)?.[2])}</b></div>${user.role==='accountant'?'':'<button type="button" class="btn small" data-action="crm-notifications">تنبيهات الـCRM <span id="crm-notice-count" aria-live="polite">'+(crmUnread||'')+'</span></button>'}</header><section id="content">${view()}</section></main></div>`;
   syncNavigation();
@@ -161,6 +168,7 @@ function render(){
 }
 function view(){
   if(page==='marketing')return marketing.view();
+  if(page==='customer-agent')return customerAgent.view();
   const workspacePage=workspace.view(page);if(workspacePage!==null)return workspacePage;
   const omni=omniView();if(omni!==null)return omni;
   const extra=advancedView();if(extra!==null)return extra;
@@ -206,7 +214,13 @@ async function loadFiles(id){const files=await api('/contacts/'+id+'/files'),el=
 async function loadCustomerWorkspace(id){
   customerWorkspaceState=await api('/contacts/'+id+'/workspace');const channel=$('#customer-channel-panel'),timeline=$('#customer-timeline-panel');
   if(channel)channel.innerHTML=customerChannelButtons(customerWorkspaceState)+(user.role==='admin'?'<button type="button" class="linkbutton" data-action="customer-mail-settings">إعداد واختبار بريد الشركة</button>':'');
-  const messenger=$('#record-messenger');if(messenger)recordMessenger.mount(messenger,customerWorkspaceState);
+  const messenger=$('#record-messenger');
+  if(messenger){
+    recordMessenger.mount(messenger,customerWorkspaceState);
+    const area=messenger.previousElementSibling?.matches('[data-agent-contact]')?messenger.previousElementSibling:document.createElement('div');
+    if(!area.isConnected)messenger.before(area);
+    customerAgent.mount(area,id,messenger.closest('[data-agent-lead]')?.dataset.agentLead).catch(()=>area.remove());
+  }
   if(timeline)timeline.innerHTML='<div class="actions"><button type="button" class="linkbutton" data-action="customer-refresh" data-id="'+id+'">تحديث سجل المتابعة</button></div>'+customerMailHistory(customerWorkspaceState)+customerTimeline(customerWorkspaceState);
 }
 async function openCustomerChannel(id,index){
@@ -231,7 +245,7 @@ async function showLead(id){
   const form=modal(current?'تفاصيل الفرصة':'فرصة بيع جديدة',`${summary}${current?'<button type="button" class="btn" data-action="edit-contact" data-id="'+current.contact_id+'">ملف العميل والتواصل وسجل المتابعة</button>'+(isManager()?'<button type="button" class="btn" data-action="crm-assign" data-id="'+escape(current.id)+'">تعيين مسؤول</button>':''):''}<div class="formgrid"><div class="full"><label>عنوان الفرصة *</label><input name="title" value="${escape(current?.title||'')}" required></div>${current?`<div><label>مرحلة الفرصة<select name="stage">${selectOptions(stages,current.stage)}</select></label></div>`:''}${!current?`<div><label>العميل *</label><select name="contact_id" required>${contactOptions()}</select></div><div><label>القيمة بالجنيه المصري</label><input name="value" type="number" step="0.01" min="0" value="0"></div>`:''}${customInputs('lead',current?JSON.parse(current.custom):{})}</div>`);
   bindForm(form,async(values,el)=>{const body={...Object.fromEntries(values),custom:customValues(el,'lead')};if(!current)body.value_minor=Math.round(Number(values.get('value'))*100);delete body.value;await api(current?'/leads/'+id:'/leads',current?'PATCH':'POST',body);});
   if(current){
-   const section=document.createElement('section');section.className='customer-workspace';section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
+   const section=document.createElement('section');section.className='customer-workspace';section.dataset.agentLead=current.id;section.innerHTML='<h3>المحادثة من داخل الفرصة</h3><div id="customer-channel-panel"></div><div id="record-messenger" class="record-messenger"></div>';
    const followup=document.createElement('section');followup.className='customer-followup';followup.innerHTML='<h3>ملاحظات الفريق والمتابعة</h3><label for="note-body">ملاحظة داخلية — لا تُرسل للعميل</label><textarea id="note-body" rows="3" maxlength="4000" placeholder="آخر إجراء وخطوة المتابعة التالية"></textarea><button type="button" class="btn small" data-action="add-note" data-id="'+current.contact_id+'">حفظ الملاحظة</button><div id="customer-timeline-panel"></div>';
    form.querySelector('.modalfoot').before(section,followup);arrangeRecord(form);await loadCustomerWorkspace(current.contact_id);
   }
@@ -277,6 +291,7 @@ async function action(name,id){
   if(name==='clear-page-search'){applyPageSearch('',null);$('[data-page-search]')?.focus();return;}
   if(await studentRecords.action(name,id))return;
   if(await marketing.action(name,id))return;
+  if(await customerAgent.action(name,id))return;
   if(await workspace.action(name,id))return;
   if(recordViews.action(name,id)){render();return;}
   if(await advancedAction(name,id))return;

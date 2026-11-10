@@ -1,10 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { migrate, migrateV3, migrateV4,migrateV5,migrateV6,migrateV7,migrateV8,migrateV9,migrateV10,migrateV11 } from './migrations.mjs';
+import { migrate, migrateV3, migrateV4,migrateV5,migrateV6,migrateV7,migrateV8,migrateV9,migrateV10,migrateV11,migrateV12 } from './migrations.mjs';
 import {normalizeSearch} from './international.mjs';
 
-export const LATEST_SCHEMA_VERSION=11;
+export const LATEST_SCHEMA_VERSION=12;
 
 export function openDatabase(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -103,6 +103,7 @@ export function openDatabase(path) {
   migrateV9(db);
   migrateV10(db);
   migrateV11(db);
+  migrateV12(db);
   db.function('me_search_normalize',{deterministic:true},normalizeSearch);
   return db;
 }

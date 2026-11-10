@@ -1,3 +1,4 @@
+import {customerAgentSendAllowed,ingestCustomerAgent,pauseCustomerAgent} from './customer-agent.mjs';
 import {whatsappLookupReply} from './customer-status.mjs';
 import { transaction } from './db.mjs';
 import { hash, normalizePhone, statusProgress, windowOpen } from './security.mjs';
@@ -19,7 +20,7 @@ export function acceptWebhook(db, raw) {
   db.prepare('INSERT OR IGNORE INTO webhook_events(id,digest,payload,created_at) VALUES(?,?,?,?)')
     .run(uid(), hash(raw), JSON.stringify(payload), now());
 }
-export function processWebhookQueue(db, baseConfig, origin = '', key) {
+export function processWebhookQueue(db, baseConfig, origin = '', key, env={}) {
   const events = db.prepare("SELECT * FROM webhook_events WHERE status='new' ORDER BY created_at LIMIT 10").all();
   for (const event of events) {
     try {
@@ -75,6 +76,7 @@ export function processWebhookQueue(db, baseConfig, origin = '', key) {
             runAutomations(db,'whatsapp.received',contact,messageId);
             recordCrmIntake(db,{contactId:contact.id,leadId:lead.id,kind:'whatsapp',eventId:messageId,source:'whatsapp',waiting:Boolean(routing?.waiting)});
             audit(db,null,'received','message',messageId,{channel:'whatsapp'});
+            if(ingestCustomerAgent(db,{env,contact,conversation,lead,messageId,phoneId:config.phoneId,body,kind,received}))continue;
             const settings=intakeSettings(db);
             const lookup=windowOpen(received)&&settings.whatsapp_auto_reply&&settings.whatsapp_status_lookup===true&&kind==='text'?whatsappLookupReply(db,contact,phone,body,{firstInbound,conversationId:conversation.id,phoneId:config.phoneId}):null;
             const legacyWelcome=firstInbound&&/^https?:\/\//.test(origin)&&!(settings.whatsapp_status_lookup===true&&kind==='text');
@@ -134,6 +136,7 @@ export function queueMessage(db, user, conversation, input, config) {
   }
   const id = uid();
   transaction(db,()=>{
+    if(user.role)pauseCustomerAgent(db,conversation.contact_id,user,config.phoneId);
     db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
       VALUES(?,?,?,?,?,?,?,?)`).run(id,conversation.id,'out',payload.type,input.body || input.template_name || '',JSON.stringify(payload),'queued',now());
     db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(id,config.phoneId);
@@ -141,11 +144,15 @@ export function queueMessage(db, user, conversation, input, config) {
   });
   return {id,status:'queued'};
 }
-export async function sendNext(db, baseConfig, transport = fetch,key) {
+export async function sendNext(db, baseConfig, transport = fetch,key,env={}) {
   const message = db.prepare(`SELECT m.*,c.phone,v.last_inbound FROM messages m
     JOIN conversations v ON v.id=m.conversation_id JOIN contacts c ON c.id=v.contact_id
     WHERE m.status='queued' AND m.direction='out' ORDER BY m.created_at LIMIT 1`).get();
   if (!message) return;
+  if(!customerAgentSendAllowed(db,env,message.id)){
+    db.prepare("UPDATE messages SET status='blocked',error_code='AGENT_POLICY_BLOCKED' WHERE id=?").run(message.id);
+    return;
+  }
   const config=messageWhatsAppConfig(db,key,baseConfig,message.id);
   if(!config.accessToken||!config.phoneId||!/^v\d+\.\d+$/.test(config.version||'')){if(db.prepare('SELECT phone_id FROM message_accounts WHERE message_id=?').get(message.id)?.phone_id!==baseConfig.phoneId)db.prepare("UPDATE messages SET status='blocked',error_code='ACCOUNT_DISABLED' WHERE id=?").run(message.id);return;}
   message.last_inbound=accountWindow(db,{id:message.conversation_id,last_inbound:message.last_inbound},config.phoneId);

@@ -193,3 +193,37 @@ export function migrateV11(db){
     INSERT INTO schema_versions VALUES(11);
   `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
 }
+
+export function migrateV12(db){
+  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=12').get())return;
+  db.exec('BEGIN IMMEDIATE');
+  try{
+    db.exec(`
+      CREATE TABLE customer_agent_sources(
+        id TEXT PRIMARY KEY,title TEXT NOT NULL,question TEXT NOT NULL,answer TEXT NOT NULL,
+        url TEXT NOT NULL DEFAULT '',reviewed_until TEXT,reviewed_at TEXT,reviewed_by TEXT REFERENCES users(id),
+        status TEXT NOT NULL CHECK(status IN('draft','approved','disabled')),updated_at TEXT NOT NULL);
+      CREATE TABLE customer_agent_threads(
+        conversation_id TEXT NOT NULL REFERENCES conversations(id),phone_id TEXT NOT NULL,
+        lead_id TEXT NOT NULL REFERENCES leads(id),state TEXT NOT NULL,reason TEXT NOT NULL,
+        facts TEXT NOT NULL DEFAULT '{}',summary TEXT NOT NULL DEFAULT '',next_step TEXT NOT NULL DEFAULT '',
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        updated_at TEXT NOT NULL,PRIMARY KEY(conversation_id,phone_id));
+      CREATE TABLE customer_agent_jobs(
+        inbound_id TEXT PRIMARY KEY REFERENCES messages(id),conversation_id TEXT NOT NULL REFERENCES conversations(id),
+        phone_id TEXT NOT NULL,lead_id TEXT NOT NULL REFERENCES leads(id),
+        status TEXT NOT NULL CHECK(status IN('queued','planning','done','cancelled')),
+        reason TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL,created_at TEXT NOT NULL,
+        outbound_id TEXT UNIQUE REFERENCES messages(id));
+      CREATE INDEX customer_agent_queue ON customer_agent_jobs(status,created_at);
+      CREATE INDEX customer_agent_thread_jobs ON customer_agent_jobs(conversation_id,phone_id,status);
+      INSERT INTO schema_versions VALUES(12);
+    `);
+    const draft=db.prepare("INSERT INTO customer_agent_sources(id,title,question,answer,url,status,updated_at) VALUES(?,?,?,?,?,'draft',?)");
+    const at=new Date().toISOString();
+    draft.run('website-admissions','الموقع الرسمي · التقديم','التقديم للجامعات في مصر واختيار الجامعة','فريق ميدل إيست يساعدك في اختيار التخصص ومراجعة مستنداتك ومتابعة طلب التقديم للجامعات الحكومية والخاصة.','https://mideastedu-eg.com/',at);
+    draft.run('website-postgraduate','الموقع الرسمي · الدراسات العليا','الدراسات العليا ماجستير دكتوراه','فريق ميدل إيست يساعدك في اختيار برنامج الماجستير أو الدكتوراه وتجهيز المستندات ومتابعة التقديم حسب متطلبات الجامعة.','https://mideastedu-eg.com/',at);
+    draft.run('website-documents','الموقع الرسمي · تصديق المستندات','توثيق تصديق الشهادات والوثائق والمستندات','فريق ميدل إيست يساعدك في تجهيز الشهادات والوثائق ومتابعة إجراءات التصديق حسب نوع المعاملة.','https://mideastedu-eg.com/',at);
+    db.exec('COMMIT');
+  }catch(error){db.exec('ROLLBACK');throw error;}
+}
