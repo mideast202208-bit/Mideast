@@ -5,12 +5,14 @@ import {fileURLToPath} from 'node:url';
 import {createRecoveryBundle,requiresRecoveryKey} from './recovery.mjs';
 import {storageHealth} from './storage-health.mjs';
 import {LATEST_SCHEMA_VERSION} from './db.mjs';
+// Schema 12 adds only customer-agent tables. This rollback build keeps their data and blocks their outbox.
+const MAX_COMPATIBLE_SCHEMA_VERSION=12;
 export async function startupPreflight(env){
  const path=env.DB_PATH||resolve('data/mid-east.sqlite');if(!existsSync(path))return {existing:false};
  const db=new DatabaseSync(path,{readOnly:true});
  try{
   if(db.prepare('PRAGMA quick_check').get().quick_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('DATABASE_PREFLIGHT_INTEGRITY_FAILED');
-  const version=db.prepare('SELECT MAX(version) n FROM schema_versions').get().n;if(version>LATEST_SCHEMA_VERSION)throw new Error('DATABASE_NEWER_THAN_APPLICATION');
+  const version=db.prepare('SELECT MAX(version) n FROM schema_versions').get().n;if(version>MAX_COMPATIBLE_SCHEMA_VERSION)throw new Error('DATABASE_NEWER_THAN_APPLICATION');
   const keyPath=env.KEY_PATH||resolve(dirname(path),'server.key'),key=env.APP_ENCRYPTION_KEY?Buffer.from(env.APP_ENCRYPTION_KEY,'hex'):existsSync(keyPath)?readFileSync(keyPath):null;
   if(requiresRecoveryKey(db)&&key?.length!==32)throw new Error('EXISTING_DATABASE_RECOVERY_KEY_MISSING');
   if(env.REQUIRE_PERSISTENT_STORAGE==='1'){

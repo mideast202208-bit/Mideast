@@ -146,6 +146,11 @@ export async function sendNext(db, baseConfig, transport = fetch,key) {
     JOIN conversations v ON v.id=m.conversation_id JOIN contacts c ON c.id=v.contact_id
     WHERE m.status='queued' AND m.direction='out' ORDER BY m.created_at LIMIT 1`).get();
   if (!message) return;
+  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='customer_agent_jobs'").get()&&
+     db.prepare('SELECT 1 FROM customer_agent_jobs WHERE outbound_id=?').get(message.id)){
+    db.prepare("UPDATE messages SET status='blocked',error_code='AGENT_ROLLBACK' WHERE id=?").run(message.id);
+    return;
+  }
   const config=messageWhatsAppConfig(db,key,baseConfig,message.id);
   if(!config.accessToken||!config.phoneId||!/^v\d+\.\d+$/.test(config.version||'')){if(db.prepare('SELECT phone_id FROM message_accounts WHERE message_id=?').get(message.id)?.phone_id!==baseConfig.phoneId)db.prepare("UPDATE messages SET status='blocked',error_code='ACCOUNT_DISABLED' WHERE id=?").run(message.id);return;}
   message.last_inbound=accountWindow(db,{id:message.conversation_id,last_inbound:message.last_inbound},config.phoneId);
