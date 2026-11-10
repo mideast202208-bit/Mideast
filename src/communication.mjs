@@ -81,6 +81,7 @@ export async function handleCommunication(ctx){
   if(thread[2]==='messages'&&method==='GET')return send(200,communicationMessages(db,user,key,config,secretKey));
   if(thread[2]==='messages'&&method==='POST'){
    const input=await jsonBody(req);
+   getContact(db,user,row.contact_id);
    const context=threadStudents(db,user,row);if(context.requires_choice)fail(409,'هذا الرقم مرتبط بأكثر من طالب؛ اختر الملف قبل الرد');
    const student=context.selected;if(input.student_id&&input.student_id!==student?.id)fail(409,'تغير ملف الطالب المختار؛ حدّث المحادثة قبل الإرسال');
    if(input.include_reference&&!student)fail(409,'اختر ملف الطالب لإدراج رقمه');

@@ -4,6 +4,7 @@ import { token,hash,normalizePhone } from './security.mjs';
 import { encryptSecret,decryptSecret } from './integration-settings.mjs';
 import { intakeSettings,intakeOwner,channelNames } from './omni-config.mjs';
 import { validateAppData } from './studio.mjs';
+import { claimEnabled,intakeAssignment,prepareReturningIntake,recordCrmIntake } from './crm-inbox.mjs';
 import { queueMessage } from './whatsapp.mjs';
 import { resolveRegistrationLink } from './intake-links.mjs';
 
@@ -22,7 +23,7 @@ export function cleanIntake(input){
   phone=input.phone_country?internationalPhone(input.phone,input.phone_country):normalizePhone(phone);
   const email=text(input.email||'','البريد',254,false).toLowerCase();
   if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'بريد غير صالح');
-  const source=['website','facebook','instagram','whatsapp','api'].includes(input.source)?input.source:'website';
+  const source=Object.hasOwn(channelNames,input.source)&&input.source!=='manual'?input.source:'website';
   const nonAcademic=input.level==='غير دراسي';
   const requested_service=text(input.requested_service||'','الخدمة المطلوبة',200,false);
   const certificate=text(input.certificate||(nonAcademic?'أخرى':''),'نوع الشهادة',80);
@@ -32,7 +33,7 @@ export function cleanIntake(input){
   const level=input.level||'بكالوريوس';if(!['بكالوريوس','ماجستير','دكتوراه','غير دراسي'].includes(level))fail(400,'مرحلة دراسية غير صالحة');
   const result={name,phone,email,source,certificate,academic_year,level,nationality:input.nationality_code?nationality(input.nationality_code):text(input.nationality||'','الجنسية',80,false),university:text(input.university||'أحتاج استشارة','الجامعة',160),faculty:text(input.faculty||'أحتاج استشارة','التخصص',160),notes:text(input.notes||'','الملاحظات',2000,false),campaign:text(input.campaign||'','الحملة',150,false),whatsapp_opt_in:input.whatsapp_opt_in===true};
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(input.request_key||''))fail(400,'مفتاح الطلب غير صالح؛ أعد فتح النموذج');
-  return {...result,...(input.phone_country?{phone_country:input.phone_country}:{}),...(input.nationality_code?{nationality_code:input.nationality_code}:{}),...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{})};
+  return {...result,...(input.phone_country?{phone_country:input.phone_country}:{}),...(input.nationality_code?{nationality_code:input.nationality_code}:{}),...(requested_service?{requested_service}:{}),request_key:input.request_key,...(input.link_token?{link_token:text(input.link_token,'رابط التسجيل',200)}:{}),...(input.enquiry_lead_id?{enquiry_lead_id:text(input.enquiry_lead_id,'مرجع الاستفسار',36)}:{})};
 }
 function intakeFiles(files=[]){
   if(!Array.isArray(files)||files.length>intakeLimits.maxFiles)fail(400,'بحد أقصى 12 مستندًا');
@@ -65,15 +66,16 @@ export function createRegistration(db,input,key,origin){
   const record={id:uid(),reference:'ME-'+new Date().getUTCFullYear()+'-'+token().slice(0,10).toUpperCase(),created_at:now()};
   const receipt=token(),fileId=uid(),studentId=uid(),admissionId=uid();let leadId=uid();
   transaction(db,()=>{
-    const linkedId=resolveRegistrationLink(clean.link_token,key);
+    const linkedId=resolveRegistrationLink(clean.link_token,key,clean.enquiry_lead_id);
     const linked=linkedId?db.prepare('SELECT * FROM contacts WHERE id=?').get(linkedId):null;
     if(linkedId&&!linked)fail(400,'رابط العميل غير متاح');
     const byPhone=db.prepare('SELECT * FROM contacts WHERE phone=?').get(clean.phone);
     if(linked&&((linked.phone&&linked.phone!==clean.phone)||(byPhone&&byPhone.id!==linked.id)))fail(409,'الرقم مرتبط بملف مختلف؛ تواصل مع الفريق لمراجعة ربط الحساب');
     let contact=linked||byPhone,created=!contact;
+    const routing=contact?prepareReturningIntake(db,contact):intakeAssignment(db,owner.id);
     if(!contact){
-      contact={id:uid(),name:clean.name,phone:clean.phone,email:clean.email,owner_id:owner.id,source:clean.source};
-      db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,contact.phone,contact.email,clean.source,owner.id,'{}',now(),now());
+      contact={id:uid(),name:clean.name,phone:clean.phone,email:clean.email,owner_id:routing.id,source:clean.source};
+      db.prepare('INSERT INTO contacts VALUES(?,?,?,?,?,?,?,?,?)').run(contact.id,contact.name,contact.phone,contact.email,clean.source,contact.owner_id,'{}',now(),now());
       runAutomations(db,'contact.created',contact,contact.id);
     }
     if(linked&&!linked.phone){db.prepare("UPDATE contacts SET phone=?,email=CASE WHEN email='' THEN ? ELSE email END,updated_at=? WHERE id=?").run(clean.phone,clean.email,now(),linked.id);}
@@ -82,9 +84,19 @@ export function createRegistration(db,input,key,origin){
     const actor={...assigned,role:'admin'};
     const student=validateAppData(db,actor,apps.me_students,{guardian:contact.id,certificate:clean.certificate,academic_year:clean.academic_year,nationality:clean.nationality,...(clean.nationality_code?{nationality_code:clean.nationality_code}:{}),...(clean.phone_country?{phone_country:clean.phone_country}:{}),notes:[clean.requested_service?'الخدمة المطلوبة: '+clean.requested_service:'',clean.notes].filter(Boolean).join('\n')});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(studentId,apps.me_students,clean.name,assigned.id,student,now(),now());
-    const admission=validateAppData(db,actor,apps.me_admissions,{student:studentId,reference:record.reference,university:clean.university,faculty:clean.faculty,level:clean.level,application_status:'استكمال البيانات',...(clean.requested_service?{requested_service:clean.requested_service}:{})});
+    const admission=validateAppData(db,actor,apps.me_admissions,{student:studentId,reference:record.reference,academic_year:clean.academic_year,university:clean.university,faculty:clean.faculty,level:clean.level,application_status:'استكمال البيانات',...(clean.requested_service?{requested_service:clean.requested_service}:{})});
     db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(admissionId,apps.me_admissions,record.reference+' · '+clean.name,assigned.id,admission,now(),now());
-    const existingEnquiry=db.prepare("SELECT id FROM leads WHERE contact_id=? AND stage NOT IN('won','lost') AND title LIKE 'استفسار%' ORDER BY created_at DESC LIMIT 1").get(contact.id);
+    const enquiries=db.prepare(`SELECT l.id FROM leads l WHERE l.contact_id=? AND l.owner_id=?
+      AND l.stage NOT IN('won','lost') AND l.title LIKE 'استفسار%'
+      AND NOT EXISTS (SELECT 1 FROM intake_registrations r WHERE r.lead_id=l.id)
+      AND NOT EXISTS (SELECT 1 FROM quick_enquiries q WHERE q.lead_id=l.id) LIMIT 2`).all(contact.id,assigned.id);
+    let existingEnquiry=enquiries.length===1?enquiries[0]:null;
+    if(clean.enquiry_lead_id){
+      existingEnquiry=db.prepare(`SELECT l.id,q.source,q.campaign FROM quick_enquiries q JOIN leads l ON l.id=q.lead_id
+        WHERE l.id=? AND l.contact_id=? AND l.owner_id=? AND l.stage NOT IN('won','lost')
+        AND NOT EXISTS (SELECT 1 FROM intake_registrations r WHERE r.lead_id=l.id)`).get(clean.enquiry_lead_id,contact.id,assigned.id);
+      if(!existingEnquiry)fail(409,'رابط الاستكمال لم يعد متاحًا؛ تواصل مع فريق المتابعة');
+    }
     if(existingEnquiry){leadId=existingEnquiry.id;}else{
       const lead={id:leadId,contact_id:contact.id,title:(clean.requested_service||clean.level)+' · '+clean.name,stage:'new',owner_id:assigned.id};
       db.prepare('INSERT INTO leads VALUES(?,?,?,?,?,?,?,?,?)').run(leadId,contact.id,lead.title,'new',0,assigned.id,'{}',now(),now());
@@ -104,7 +116,9 @@ export function createRegistration(db,input,key,origin){
     if(clean.whatsapp_opt_in)db.prepare('INSERT INTO contact_preferences VALUES(?,1,?) ON CONFLICT(contact_id) DO UPDATE SET whatsapp_opt_in=1,updated_at=excluded.updated_at').run(contact.id,now());
     const delivery=clean.whatsapp_opt_in?'pending':'not_requested';
     db.prepare('INSERT INTO intake_registrations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(record.id,record.reference,clean.request_key,fingerprint,contact.id,leadId,studentId,admissionId,clean.source,clean.campaign,hash(receipt),encryptSecret(receipt,key),fileId,delivery,null,null,record.created_at);
+      .run(record.id,record.reference,clean.request_key,fingerprint,contact.id,leadId,studentId,admissionId,existingEnquiry?.source??clean.source,existingEnquiry?.campaign??clean.campaign,hash(receipt),encryptSecret(receipt,key),fileId,delivery,null,null,record.created_at);
+    if(claimEnabled(db))db.prepare('INSERT OR IGNORE INTO conversations(id,contact_id,created_at) VALUES(?,?,?)').run(uid(),contact.id,now());
+    recordCrmIntake(db,{contactId:contact.id,leadId,kind:'registration',eventId:record.id,source:existingEnquiry?.source??clean.source,waiting:Boolean(routing?.waiting)});
     audit(db,null,'registered','intake',record.id,{source:clean.source,contact_created:created,files:files.length});
   });
   return receiptResult(db.prepare('SELECT * FROM intake_registrations WHERE id=?').get(record.id),key,origin,false);

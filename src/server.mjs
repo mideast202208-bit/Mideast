@@ -1,4 +1,5 @@
 import {handleCustomerExport} from './customer-export.mjs';
+import { handleCrmInbox,transferCrmContact } from './crm-inbox.mjs';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,6 @@ import { processMediaJob, maybeSyncTemplates } from './media.mjs';
 import { verifyFactor, handleMfa } from './mfa.mjs';
 import { bootstrapOwner } from './bootstrap.mjs';
 import { maybeSnapshot } from './backups.mjs';
-import { reassignContactRecords } from './studio.mjs';
 import { handleBusiness } from './business-routes.mjs';
 import { ensureOmniDefaults } from './omni-config.mjs';
 import { handleOmni,handleOmniPublic } from './omni-routes.mjs';
@@ -33,6 +33,7 @@ import {healthStatus} from './storage-health.mjs';
 import {startupPreflight} from './startup-preflight.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
+const websiteFramePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors https://mideastedu-eg.com https://www.mideastedu-eg.com; base-uri 'none'; form-action 'self'";
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
 export function createApp(options = {}) {
   const env = options.env || process.env;
@@ -49,6 +50,9 @@ export function createApp(options = {}) {
   }
   const secretKey=options.secretKey || loadServerKey(env);
   ensureOmniDefaults(db);
+  if(production&&env.RECOVERY_MODE!=='1'&&env.CRM_CLAIM_DEFAULT==='1'){
+    db.prepare("INSERT OR IGNORE INTO settings VALUES('crm.claim_enabled','1')").run();
+  }
   recoverCustomerEmailJobs(db);
   recoverMarketingJobs(db);
   let config = effectiveConfig(db,env,secretKey);
@@ -90,7 +94,9 @@ export function createApp(options = {}) {
     getContact(db,user,conversation.contact_id);return conversation;
   }
   async function handler(req,res) {
+    if(production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     res.setHeader('X-Content-Type-Options','nosniff');
+    res.setHeader('X-Robots-Tag','noindex, nofollow');
     res.setHeader('Referrer-Policy','same-origin');
     res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-src https://www.youtube.com https://www.tiktok.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -124,12 +130,18 @@ export function createApp(options = {}) {
       if(await handleOmniPublic({db,path,method,req,res,jsonBody,sendJson,secretKey,origin,rateLimit,rawBody}))return;
       if(!path.startsWith('/api/')){
         if(method!=='GET')fail(405,'Method not allowed');
+        if(path==='/enquire'||path==='/enquire.js'){
+          const page=path==='/enquire';
+          if(page){res.removeHeader('X-Frame-Options');res.setHeader('Content-Security-Policy',websiteFramePolicy);}
+          res.writeHead(200,{'Content-Type':page?'text/html; charset=utf-8':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});
+          res.end(readFileSync(join(publicDir,page?'enquire.html':'enquire.js')));return;
+        }
         if(path==='/phone-lib.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'});res.end(readFileSync(new URL('../node_modules/libphonenumber-js/bundle/libphonenumber-min.js',import.meta.url)));return;}
         const assets={'/student-records.js':['student-records.js','text/javascript; charset=utf-8'],'/student-records.css':['student-records.css','text/css; charset=utf-8'],'/navigation.css':['navigation.css','text/css; charset=utf-8'],'/record-views.js':['record-views.js','text/javascript; charset=utf-8'],'/record-views.css':['record-views.css','text/css; charset=utf-8'],'/record-messenger.js':['record-messenger.js','text/javascript; charset=utf-8'],'/chat-ui.js':['chat-ui.js','text/javascript; charset=utf-8'],'/chat.css':['chat.css','text/css; charset=utf-8'],'/customer-panel.js':['customer-panel.js','text/javascript; charset=utf-8'],'/marketing.js':['marketing.js','text/javascript; charset=utf-8'],'/marketing.css':['marketing.css','text/css; charset=utf-8'],'/tour':['tour.html','text/html; charset=utf-8'],'/tour.js':['tour.js','text/javascript; charset=utf-8'],'/countries.js':['countries.js','text/javascript; charset=utf-8'],'/documents.js':['documents.js','text/javascript; charset=utf-8'],'/workspace.js':['workspace.js','text/javascript; charset=utf-8'],'/brand-icons.js':['brand-icons.js','text/javascript; charset=utf-8'],'/workspace.css':['workspace.css','text/css; charset=utf-8'],'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/print.css':['print.css','text/css; charset=utf-8'],'/omni.css':['omni.css','text/css; charset=utf-8'],'/omni.js':['omni.js','text/javascript; charset=utf-8'],'/apply':['apply.html','text/html; charset=utf-8'],'/registration':['apply.html','text/html; charset=utf-8'],'/services.js':['services.js','text/javascript; charset=utf-8'],'/apply.js':['apply.js','text/javascript; charset=utf-8']};
         const asset=assets[path];if(!asset)fail(404,'الصفحة غير موجودة');
         if(path==='/apply'||path==='/registration'){
           res.removeHeader('X-Frame-Options');
-          res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors https://mideastedu-eg.com https://www.mideastedu-eg.com; base-uri 'none'; form-action 'self'");
+          res.setHeader('Content-Security-Policy',websiteFramePolicy);
         }
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-cache'});res.end(readFileSync(join(publicDir,asset[0])));return;
       }
@@ -138,7 +150,8 @@ export function createApp(options = {}) {
       if(!production&&req.headers.origin){try{developmentSameHost=new URL(req.headers.origin).host===req.headers.host;}catch{}}
       if(write && req.headers.origin && !allowedOrigins.has(req.headers.origin) && !developmentSameHost)fail(403,'المصدر غير مسموح');
       if(path==='/api/setup/status'&&method==='GET'){
-        sendJson(res,200,{required:!db.prepare('SELECT id FROM users LIMIT 1').get(),browser_setup:Boolean(env.BOOTSTRAP_TOKEN&&env.BOOTSTRAP_TOKEN.length>=32)});return;
+        const required=!db.prepare('SELECT id FROM users LIMIT 1').get();
+        sendJson(res,200,{required,browser_setup:required&&Boolean(env.BOOTSTRAP_TOKEN&&env.BOOTSTRAP_TOKEN.length>=32)});return;
       }
       if(path==='/api/setup'&&method==='POST'){
         rateLimit('setup:'+req.socket.remoteAddress,10,900000);
@@ -169,6 +182,7 @@ export function createApp(options = {}) {
         res.setHeader('Set-Cookie',`me_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${production?'; Secure':''}`);
         sendJson(res,200,{ok:true});return;
       }
+      if(await handleCrmInbox({db,user,path,method,req,res,jsonBody,sendJson}))return;
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
       if(path==='/api/operations/storage'&&method==='GET'){sendJson(res,200,backupDiagnostics(db,user,env));return;}
       // These render binary/HTML directly and bypass JSON projection. Staff may
@@ -200,7 +214,7 @@ export function createApp(options = {}) {
       const contactMatch=path.match(/^\/api\/contacts\/([^/]+)$/);
       if(contactMatch && method==='PATCH'){
         if(user.role==='accountant')fail(403,'غير مسموح');
-        const current=getContact(db,user,contactMatch[1]);const input=await jsonBody(req);
+        const input=await jsonBody(req);const current=getContact(db,user,contactMatch[1]);
         if(!canViewContactDetails(user)&&(input.phone!==undefined||input.email!==undefined))fail(403,'تعديل بيانات الاتصال متاح للإدارة فقط');
         const newOwner=owner(db,user,input.owner_id || current.owner_id);
         const name=text(input.name ?? current.name,'الاسم');
@@ -210,8 +224,7 @@ export function createApp(options = {}) {
         if(phone && db.prepare('SELECT id FROM contacts WHERE phone=? AND id<>?').get(phone,current.id))fail(409,'الرقم موجود بالفعل');
         transaction(db,()=>{
           db.prepare('UPDATE contacts SET name=?,phone=?,email=?,owner_id=?,custom=?,updated_at=? WHERE id=?').run(name,phone,email,newOwner,custom,now(),current.id);
-          for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(newOwner,current.id);
-          reassignContactRecords(db,current.id,newOwner);
+          if(newOwner!==current.owner_id)transferCrmContact(db,user,current,newOwner,'إعادة إسناد من ملف العميل');
           audit(db,user,'updated','contact',current.id,{owner_id:newOwner});
         });sendJson(res,200,{ok:true});return;
       }
@@ -219,15 +232,17 @@ export function createApp(options = {}) {
       const leadMatch=path.match(/^\/api\/leads\/([^/]+)$/);
       if(leadMatch && method==='PATCH'){
         if(user.role==='accountant')fail(403,'غير مسموح');
+        const input=await jsonBody(req);
         const current=db.prepare('SELECT * FROM leads WHERE id=?').get(leadMatch[1]);if(!current)fail(404,'الفرصة غير موجودة');
-        getContact(db,user,current.contact_id);const input=await jsonBody(req);
+        getContact(db,user,current.contact_id);
         const stage=input.stage ?? current.stage;if(!['new','contacted','qualified','proposal','won','lost'].includes(stage))fail(400,'مرحلة غير صالحة');
+        if(['won','lost'].includes(stage)&&db.prepare('SELECT 1 FROM crm_waiting WHERE lead_id=?').get(current.id))fail(409,'استلم الفرصة أو عيّن مسؤولًا قبل إغلاقها');
         const title=text(input.title ?? current.title,'عنوان الفرصة');
         const custom=validateCustom(db,'lead',input.custom ?? JSON.parse(current.custom));
         transaction(db,()=>{
           db.prepare('UPDATE leads SET stage=?,title=?,custom=?,updated_at=? WHERE id=?').run(stage,title,custom,now(),current.id);
           if(stage!==current.stage)runAutomations(db,'lead.stage_changed',{...current,stage},uid());
-          audit(db,user,'updated','lead',current.id,{stage});
+          audit(db,user,'updated','lead',current.id,{stage,previous_stage:current.stage});
         });sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/tasks' && method==='POST'){

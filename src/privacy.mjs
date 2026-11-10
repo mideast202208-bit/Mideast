@@ -23,8 +23,8 @@ const digits = value => String(value).replace(/[٠-٩]/g,c=>String('٠١٢٣٤٥
 const escapeRE = value => value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const sensitiveKey = key => /(?:^|_)(?:phone|email|mobile|telephone)(?:_|$)/i.test(key)&&!/^(?:has_phone|has_email|phone_country|phone_id|phone_id_set|email_available|email_enabled|email_configured)$/i.test(key);
 const privateLinkKey = key => /^(?:receipt_url|receipt_token|receipt_cipher|receipt_hash)$/i.test(key);
-const opaqueKey = key => /^(?:id|csrf|hash|token|signature|uri|provider_id|media_id|account_key|thread_key|key|[a-z_]+_id)$/i.test(key);
-const fileReference = value => /^(?:ME-\d{4}-[A-F0-9]{10}|ST-[A-F0-9]{12})$/.test(value);
+const opaqueKey = key => /^(?:id|csrf|hash|token|signature|uri|registration_url|provider_id|media_id|account_key|thread_key|key|[a-z_]+_id)$/i.test(key);
+const fileReference = value => /^(?:ME-\d{4}-[A-F0-9]{10}|ST-[A-F0-9]{12}|ENQ-[A-F0-9]{12})$/.test(value);
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 function phoneForms(value){
   const raw=digits(value||''),forms=[raw.replace(/\D/g,'')];

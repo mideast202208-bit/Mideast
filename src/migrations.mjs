@@ -1,3 +1,5 @@
+import { ensureAdmissionJourneyFields } from './admission-journey.mjs';
+
 export function migrateV8(db){
  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=8').get())return;
  db.exec('BEGIN IMMEDIATE');
@@ -158,5 +160,36 @@ export function migrateV9(db){
     CREATE INDEX customer_email_contact ON customer_email_jobs(contact_id,created_at);
     CREATE INDEX customer_email_queue ON customer_email_jobs(status,created_at);
     INSERT INTO schema_versions VALUES(9);
+  `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+}
+export function migrateV10(db){
+  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=10').get())return;
+  db.exec('BEGIN IMMEDIATE');
+  try{db.exec(`
+    CREATE TABLE quick_enquiries(
+      request_hash TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, reference TEXT NOT NULL UNIQUE,
+      lead_id TEXT NOT NULL UNIQUE REFERENCES leads(id), task_id TEXT NOT NULL REFERENCES tasks(id),
+      name TEXT NOT NULL, service TEXT NOT NULL, source TEXT NOT NULL, campaign TEXT NOT NULL,
+      notes TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE INDEX quick_enquiry_date ON quick_enquiries(created_at);
+  `);
+  const admissions=db.prepare("SELECT id FROM studio_apps WHERE app_key='me_admissions'").get();
+  if(admissions)ensureAdmissionJourneyFields(db,admissions.id);
+  db.exec('INSERT INTO schema_versions VALUES(10); COMMIT;');}catch(error){db.exec('ROLLBACK');throw error;}
+}
+
+export function migrateV11(db){
+  if(db.prepare('SELECT 1 FROM schema_versions WHERE version=11').get())return;
+  db.exec('BEGIN IMMEDIATE');
+  try{db.exec(`
+    CREATE TABLE crm_waiting(
+      lead_id TEXT PRIMARY KEY REFERENCES leads(id),contact_id TEXT NOT NULL UNIQUE REFERENCES contacts(id),
+      source TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE crm_activity(
+      seq INTEGER PRIMARY KEY,kind TEXT NOT NULL,event_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL REFERENCES contacts(id),lead_id TEXT REFERENCES leads(id),
+      source TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(kind,event_id));
+    CREATE INDEX crm_activity_contact ON crm_activity(contact_id,seq DESC);
+    INSERT INTO schema_versions VALUES(11);
   `);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
 }

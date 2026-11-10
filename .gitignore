@@ -1,11 +1,21 @@
 data/
 backups/
 .env
+.env.*
+!deploy/.env.example
 *.log
 node_modules/
 
 *.mebak
 *.pem
 *.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 .env.recovery
 recovery-output/

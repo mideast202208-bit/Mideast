@@ -24,7 +24,12 @@ export function studentDossier(db,user,id){
  const registrations=db.prepare(`SELECT r.id,r.reference,r.created_at,r.lead_id,r.admission_id,json_extract(a.data,'$.application_status') registration_status
  FROM intake_registrations r JOIN app_records a ON a.id=r.admission_id WHERE r.student_id=? AND r.contact_id=?`+(manager(user)?'':' AND a.owner_id=?')+' ORDER BY r.created_at DESC,r.rowid DESC').all(id,student.contact_id,...(manager(user)?[]:[user.id]));
  const opportunities=db.prepare(`SELECT DISTINCT l.id,l.title,l.stage,l.owner_id,u.name owner_name,l.created_at,l.updated_at FROM leads l JOIN users u ON u.id=l.owner_id JOIN intake_registrations r ON r.lead_id=l.id AND r.contact_id=l.contact_id WHERE r.student_id=? AND r.contact_id=?`+(manager(user)?'':' AND l.owner_id=?')+' ORDER BY l.updated_at DESC').all(id,student.contact_id,...(manager(user)?[]:[user.id])).map(lead=>({...lead,registrations:registrations.filter(r=>r.lead_id===lead.id)}));
- return {...student,documents:documents.map(d=>({...d,download_url:d.attachment_id?'/api/files/'+d.attachment_id:null})),registrations,opportunities,opportunity_count:opportunities.length,latest_registration:registrations[0]||null,checklist:Object.entries(documentTypes).filter(([k])=>k!=='other').map(([key,label])=>({key,label,count:documents.filter(d=>d.document_type===label&&d.attachment_id).length}))};
+ return {...student,documents:documents.map(d=>({...d,download_url:d.attachment_id?'/api/files/'+d.attachment_id:null})),registrations,applications:studentApplications(db,user,id),opportunities,opportunity_count:opportunities.length,latest_registration:registrations[0]||null,checklist:Object.entries(documentTypes).filter(([k])=>k!=='other').map(([key,label])=>({key,label,count:documents.filter(d=>d.document_type===label&&d.attachment_id).length}))};
+}
+function studentApplications(db,user,id){
+ return db.prepare(`SELECT r.id,r.name,json_extract(r.data,'$.reference') reference,json_extract(r.data,'$.application_status') status,
+   json_extract(r.data,'$.academic_year') academic_year FROM app_records r JOIN studio_apps app ON app.id=r.app_id AND app.app_key='me_admissions'
+   WHERE json_extract(r.data,'$.student')=?${manager(user)?'':' AND r.owner_id=?'} ORDER BY r.created_at DESC`).all(id,...(manager(user)?[]:[user.id]));
 }
 export function threadStudents(db,user,row){
  const students=findStudents(db,user,'',row.contact_id),saved=db.prepare('SELECT student_id FROM thread_student_context WHERE thread_key=?').get(row.key);
@@ -81,9 +86,20 @@ export function attachStudentDocument(db,user,row,input,base){
  const attachment=db.prepare(`SELECT a.* FROM attachments a JOIN messages m ON m.id=a.message_id LEFT JOIN message_accounts ma ON ma.message_id=m.id WHERE a.id=? AND a.contact_id=? AND m.conversation_id=? AND COALESCE(ma.phone_id,?)=?`).get(input.attachment_id,student.contact_id,row.id,base.phoneId||'',row.account_id);
  if(!attachment)fail(404,'المرفق غير متاح في هذه المحادثة');
  if(!['application/pdf','image/jpeg','image/png'].includes(attachment.mime))fail(400,'اختر صورة أو ملف PDF للمستند');
- const existing=db.prepare("SELECT d.id FROM app_records d JOIN studio_apps a ON a.id=d.app_id AND a.app_key='me_documents' WHERE json_extract(d.data,'$.student')=? AND json_extract(d.data,'$.file_reference')=?").get(student.id,attachment.id);if(existing)return {id:existing.id,replayed:true};
  const app=db.prepare("SELECT id FROM studio_apps WHERE app_key='me_documents'").get();if(!app)fail(409,'جهّز تطبيق المستندات أولًا');
- const admission=db.prepare('SELECT admission_id FROM intake_registrations WHERE student_id=? ORDER BY created_at DESC LIMIT 1').get(student.id);
- const data=validateAppData(db,user,app.id,{student:student.id,...(admission?{application:admission.admission_id}:{}),document_type:input.document_type,document_status:'صورة مستلمة',received_date:now().slice(0,10),file_reference:attachment.id});
- const id=uid(),owner=db.prepare('SELECT owner_id FROM app_records WHERE id=?').get(student.id).owner_id;db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(id,app.id,attachment.name,owner,data,now(),now());audit(db,user,'linked','student_document',id,{student_id:student.id,attachment_id:attachment.id});return {id};
+ return transaction(db,()=>{
+  const links=db.prepare("SELECT id,data FROM app_records WHERE app_id=? AND json_extract(data,'$.file_reference')=?").all(app.id,attachment.id);
+  if(links.some(link=>JSON.parse(link.data).student!==student.id))fail(409,'المرفق مربوط بملف طالب آخر. راجع الربط مع الإدارة.');
+  if(links.length){
+   const existing=links[0];
+   if(input.application!==undefined&&(JSON.parse(existing.data).application||'')!==input.application)fail(409,'المرفق محفوظ بالفعل. راجع الطلب المرتبط من فولدر الطالب.');
+   return {id:existing.id,replayed:true};
+  }
+  const applications=student.applications;
+  const application=input.application===undefined&&applications.length===1?applications[0].id:input.application;
+  if(application&&!applications.some(record=>record.id===application))fail(409,'الطلب لا يخص الطالب المختار أو غير متاح');
+  const data=validateAppData(db,user,app.id,{student:student.id,...(application?{application}:{}),document_type:input.document_type,document_status:'صورة مستلمة',received_date:now().slice(0,10),file_reference:attachment.id});
+  const id=uid();db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(id,app.id,attachment.name,student.owner_id,data,now(),now());
+  audit(db,user,'linked','student_document',id,{student_id:student.id,attachment_id:attachment.id});return {id};
+ });
 }

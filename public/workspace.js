@@ -56,7 +56,13 @@ export function createWorkspace(ctx){
    const student=studentResults.find(s=>s.id===id),accounts=comm.accounts.filter(a=>a.channel==='whatsapp'&&a.active),form=modal('فتح ملف الطالب على واتساب','<h3>'+e(student.name)+'</h3><p class="mono">'+e(student.reference)+' · '+e(student.phone||'')+'</p><label>رقم واتساب الشركة<select name="phone_id" required><option value="">اختر حساب الإرسال</option>'+accounts.map(a=>'<option value="'+e(a.account_id)+'">'+e(a.name)+'</option>').join('')+'</select></label><p class="sub">سنفتح محادثة رقم الطالب المسجل. لا تُرسل رسالة عند فتح الملف؛ الرد حسب نافذة واتساب المتاحة.</p>','فتح المحادثة');
    bindForm(form,async(_,f)=>{const result=await api('/communication/student-conversations','POST',{student_id:id,phone_id:f.elements.phone_id.value});selected=result.key;channel='all';account='all';status='all';tab='inbox';await load('communications');});
   }
-  if(name==='workspace-attach-document'){const student=studentContext?.selected;if(!student)return;const form=modal('حفظ المرفق في ملف الطالب','<p>'+e(student.name)+' · '+e(student.reference)+'</p><label>نوع المستند<select name="document_type">'+Object.values(documentTypes).map(t=>'<option>'+e(t)+'</option>').join('')+'</select></label>');bindForm(form,async(_,f)=>{await api('/communication/threads/'+encodeURIComponent(selected)+'/documents','POST',{student_id:student.id,attachment_id:id,document_type:f.elements.document_type.value});await load('communications');});}
+  if(name==='workspace-attach-document'){
+   const student=studentContext?.selected;if(!student)return;
+   const applications=student.applications||[];
+   const choices=applications.map(a=>'<option value="'+e(a.id)+'" '+(applications.length===1?'selected':'')+'>'+e(a.reference||a.name)+'</option>').join('');
+   const form=modal('حفظ المرفق في ملف الطالب','<p>'+e(student.name)+' · '+e(student.reference)+'</p><label>نوع المستند<select name="document_type">'+Object.values(documentTypes).map(t=>'<option>'+e(t)+'</option>').join('')+'</select></label><label>الطلب المرتبط<select name="application"><option value="">في فولدر الطالب فقط</option>'+choices+'</select></label>');
+   bindForm(form,async(_,f)=>{await api('/communication/threads/'+encodeURIComponent(selected)+'/documents','POST',{student_id:student.id,attachment_id:id,document_type:f.elements.document_type.value,application:f.elements.application.value});await load('communications');});
+  }
   if(name==='workspace-document'){
    const doc=studentContext?.selected?.documents.find(d=>d.id===id);const form=modal('تصنيف المستند','<p>'+e(doc?.name||'')+'</p><label>نوع المستند<select name="document_type">'+Object.values(documentTypes).map(t=>'<option '+(doc?.document_type===t?'selected':'')+'>'+e(t)+'</option>').join('')+'</select></label>');bindForm(form,async(_,f)=>{await api('/communication/documents/'+encodeURIComponent(id),'PATCH',{document_type:f.elements.document_type.value});await load('communications');});
   }

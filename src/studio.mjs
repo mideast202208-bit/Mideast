@@ -58,15 +58,30 @@ export function validateAppData(db,user,appId,input={}){
   return JSON.stringify(cleaned);
 }
 export function saveRecord(db,user,appId,input,id){
-  if(user.role==='accountant')fail(403,'التطبيق غير متاح لهذا الدور');appFor(db,appId);
+  if(user.role==='accountant')fail(403,'التطبيق غير متاح لهذا الدور');const app=appFor(db,appId);
   const current=id?recordFor(db,user,id,appId):null;
   const recordId=id||uid(),name=text(input.name ?? current?.name,'عنوان السجل');
   const assigned=owner(db,user,input.owner_id || current?.owner_id);
   const values=validateAppData(db,user,appId,input.data ?? (current?JSON.parse(current.data):{}));
+  const metadata={app_id:appId};
+  if(app.app_key==='me_admissions'){
+    const next=JSON.parse(values),previous=current?JSON.parse(current.data):{};
+    if(next.academic_year&&!/^\d{4}(?:\/\d{4})?$/.test(next.academic_year))fail(400,'أدخل موسم تقديم صحيحًا مثل 2026/2027');
+    if(next.application_status==='قيد مؤكد'&&(!next.official_reference?.trim()||!next.decision_date))fail(400,'القيد المؤكد يتطلب مرجعًا رسميًا وتاريخ القيد');
+    if(next.application_status!==previous.application_status){
+      metadata.from_status=previous.application_status??null;metadata.to_status=next.application_status;
+      metadata.assigned_user_id=assigned;metadata.official_reference=next.official_reference??null;metadata.decision_date=next.decision_date??null;
+    }
+  }
   transaction(db,()=>{
-    if(current)db.prepare('UPDATE app_records SET name=?,owner_id=?,data=?,updated_at=? WHERE id=?').run(name,assigned,values,now(),recordId);
+    if(current){
+      const conflict=()=>fail(409,'السجل اتحدّث في جلسة تانية. افتحه من جديد قبل الحفظ.');
+      if(input.expected_updated_at!==undefined&&input.expected_updated_at!==current.updated_at)conflict();
+      const updatedAt=new Date(Math.max(Date.now(),(Date.parse(current.updated_at)||0)+1)).toISOString();
+      if(!db.prepare('UPDATE app_records SET name=?,owner_id=?,data=?,updated_at=? WHERE id=? AND updated_at=?').run(name,assigned,values,updatedAt,recordId,current.updated_at).changes)conflict();
+    }
     else db.prepare('INSERT INTO app_records VALUES(?,?,?,?,?,?,?)').run(recordId,appId,name,assigned,values,now(),now());
-    audit(db,user,current?'updated':'created','app_record',recordId,{app_id:appId});
+    audit(db,user,current?'updated':'created','app_record',recordId,metadata);
   });return {id:recordId};
 }
 export function reorderFields(db,user,entity,ids){
