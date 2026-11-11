@@ -192,7 +192,10 @@ function safeReply(db,cfg,reason,body,evidence){
   const active=activeSources(db,cfg).filter(entry=>!entry.official_fee);
   if(!Array.isArray(evidence?.source_ids))return active.some(entry=>entry.answer===body);
   const question=evidence.followup?(cfg.replies[evidence.followup]||agentReplies[evidence.followup]):'';
-  return knowledgeReply(active,evidence.source_ids,question)===body;
+  const grounded=knowledgeReply(active,evidence.source_ids,question);
+  if(!grounded)return false;
+  const opening=cfg.replies.welcome||agentReplies.welcome;
+  return (evidence.welcomed?opening+'\n\n'+grounded:grounded)===body;
 }
 
 export function customerAgentSendAllowed(db,env,messageId,key,origin){
@@ -235,10 +238,11 @@ function saveOutcome(db,job,decision,cfg,key,origin){
     WHERE conversation_id=? AND phone_id=?`).run(job.lead_id,decision.state==='handoff'?'handoff':'active',decision.reason,JSON.stringify(decision.facts),summary,
       decision.state==='handoff'?'يراجع الموظف المحادثة ويتابع · '+reasonLabel:nextStep,taskId,now(),job.conversation_id,job.phone_id);
   let outbound=null;
+  const first=decision.reply&&!db.prepare(`SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.direction='in'
+    AND m.rowid<(SELECT rowid FROM messages WHERE id=?) LIMIT 1`).get(job.conversation_id,job.inbound_id);
+  if(first)decision=withWelcome(decision,cfg);
   let reply=decision.reply;
   if(reply&&safeReply(db,cfg,decision.reason,reply,decision)&&windowOpen(job.received_at)){
-    const first=!db.prepare(`SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.direction='in'
-      AND m.rowid<(SELECT rowid FROM messages WHERE id=?) LIMIT 1`).get(job.conversation_id,job.inbound_id);
     const firstOrdinary=first&&['greet','qualify','approved_source','uncertain','registration_link'].includes(decision.reason)&&['greet','lookup'].includes(agentIntent(job.body,job.kind));
     if(firstOrdinary&&agentAllowsReply(registrationIntro,cfg.forbidden)){
       const link=signedRegistrationUrl(db,job,key,origin);
@@ -252,7 +256,7 @@ function saveOutcome(db,job,decision,cfg,key,origin){
     db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
       VALUES(?,?,'out','text',?,?,'queued',?)`).run(outbound,job.conversation_id,reply,JSON.stringify({type:'text',text:{body:reply}}),now());
     db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(outbound,job.phone_id);
-    audit(db,null,'agent_reply','message',outbound,{channel:'whatsapp',reason:decision.reason,source_id:decision.source_id??null,source_ids:decision.source_ids,followup:decision.followup});
+    audit(db,null,'agent_reply','message',outbound,{channel:'whatsapp',reason:decision.reason,source_id:decision.source_id??null,source_ids:decision.source_ids,followup:decision.followup,welcomed:decision.welcomed});
   }
   db.prepare("UPDATE customer_agent_jobs SET status='done',reason=?,outbound_id=? WHERE inbound_id=?").run(decision.reason,outbound,job.inbound_id);
   audit(db,null,decision.state==='handoff'?'agent_handoff':'agent_handled','lead',job.lead_id,{reason:decision.reason});
@@ -270,6 +274,13 @@ function customizeDecision(decision,cfg){
     return {...decision,reason:'uncertain',state:'handoff',reply:agentAllowsReply(agentReplies.uncertain,cfg.forbidden)?agentReplies.uncertain:null};
   }
   return decision;
+}
+
+function withWelcome(decision,cfg){
+  if(!decision.reply||!['approved_source','qualify','uncertain','registration_link'].includes(decision.reason))return decision;
+  const opening=cfg.replies.welcome||agentReplies.welcome;
+  const reply=opening+'\n\n'+decision.reply;
+  return safeAgentAnswer(reply)&&agentAllowsReply(reply,cfg.forbidden)?{...decision,reply,welcomed:true}:decision;
 }
 
 function feeDecision(body,sources,prior){
@@ -505,11 +516,11 @@ export async function handleCustomerAgent({db,user,path,method,req,res,jsonBody,
       if(agentIntent(body)==='lookup'&&(candidates.length||qualifies)){
         try{choice=await chooseAgentSource(body,candidates,instructions,env.CUSTOMER_AGENT_OPENAI_KEY,transport);}
         catch{fail(502,'تعذّر اختبار مزوّد التصنيف');}
-        return respond({...customizeDecision(agentDecision(body,'text',sourceList,{},choice),cfg),mode:'provider_preview'});
+        return respond({...withWelcome(customizeDecision(agentDecision(body,'text',sourceList,{},choice),cfg),cfg),mode:'provider_preview'});
       }
     }
     const official=agentIntent(body)==='finance'?feeDecision(body,sources,{}):null;
-    return respond({...customizeDecision(official||agentDecision(body,'text',sourceList,{},choice),cfg),mode:'local_policy'});
+    return respond({...withWelcome(customizeDecision(official||agentDecision(body,'text',sourceList,{},choice),cfg),cfg),mode:'local_policy'});
   }
   fail(404,'مسار وكيل خدمة العملاء غير متاح');
 }
