@@ -152,6 +152,27 @@ test('Original Mid East platform integration and access boundaries',async t=>{
       assert.equal((await request('/api/data','GET',undefined,two)).status,401);
       assert.equal((await request('/api/users/'+accounts.Owner.id,'PATCH',{active:false},admin)).status,400);
     });
+    await t.test('account password changes require current credentials and revoke only that account sessions',async()=>{
+      const endpoint='/api/security/password',anotherSession=await login('Owner');
+      const replacement='Synthetic-owner-replacement-2026!';
+      const change={current_password:password,new_password:replacement};
+      assert.equal((await request(endpoint,'POST',change)).status,401);
+      assert.equal((await request(endpoint,'POST',change,{...admin,csrf:'wrong'})).status,403);
+      assert.equal((await request(endpoint,'POST',{...change,current_password:'incorrect'},admin)).status,400);
+      assert.equal((await request(endpoint,'POST',{...change,new_password:'short'},admin)).status,400);
+      assert.equal((await request('/api/users/'+accounts.Owner.id,'PATCH',{password:replacement},admin)).status,400);
+      const result=await request(endpoint,'POST',change,admin);
+      assert.equal(result.status,200);
+      assert.match(result.response.headers.get('set-cookie'),/Max-Age=0/);
+      assert.equal((await request('/api/me','GET',undefined,admin)).status,401);
+      assert.equal((await request('/api/me','GET',undefined,anotherSession)).status,401);
+      assert.equal((await request('/api/me','GET',undefined,one)).status,200);
+      assert.equal((await request('/api/login','POST',{email:accounts.Owner.email,password})).status,401);
+      const loggedIn=await request('/api/login','POST',{email:accounts.Owner.email,password:replacement});
+      assert.equal(loggedIn.status,200);
+      admin.cookie=loggedIn.response.headers.get('set-cookie').split(';')[0];admin.csrf=loggedIn.body.csrf;
+      assert.equal(db.prepare("SELECT metadata FROM audit WHERE action='password_changed' AND entity_id=?").get(accounts.Owner.id).metadata,'{}');
+    });
     await t.test('audit excludes credentials and provider tokens',async()=>{
       const result=await request('/api/audit','GET',undefined,admin);assert.equal(result.status,200);assert.ok(result.body.length>10);
       assert.ok(!JSON.stringify(result.body).includes(password));assert.ok(!JSON.stringify(result.body).includes(env.META_ACCESS_TOKEN));

@@ -1,5 +1,5 @@
 const states={active:'يديرها الوكيل',handoff:'محولة إلى الفريق',paused:'استلمها موظف',stopped:'المتابعة متوقفة'};
-const reasons={finance:'سؤال مالي',official_fee:'رسوم رسمية معتمدة',registration_link:'رابط تسجيل',documents:'مستندات واردة',human:'طلب موظف أو شكوى',uncertain:'يحتاج تحققًا',sensitive:'بيانات خاصة أو مرفق',provider:'تعذر التصنيف',window:'انتهت نافذة واتساب',staff:'استلام بشري',stop:'طلب إيقاف المتابعة',greet:'ترحيب',qualify:'تحديد الاحتياج',approved_source:'مصدر معتمد',AGENT_SETTINGS_CHANGED:'تغيّر الإعداد',AGENT_HUMAN_TAKEOVER:'استلام بشري',AGENT_DOCUMENT_HANDOFF:'استلام مستندات',AGENT_OPT_OUT:'إيقاف بطلب العميل',AGENT_INACTIVE:'الوكيل غير نشط'};
+const reasons={acknowledgement:'تأكيد أو شكر',finance:'أتعاب المكتب أو الدفع',official_fee:'رسوم رسمية معتمدة',registration_link:'رابط تسجيل',documents:'مستندات واردة',human:'طلب موظف أو شكوى',uncertain:'يحتاج تحققًا',sensitive:'بيانات خاصة أو مرفق',provider:'تعذر تجهيز الرد',window:'انتهت نافذة واتساب',staff:'استلام بشري',stop:'طلب إيقاف المتابعة',greet:'ترحيب',qualify:'تحديد الاحتياج',approved_source:'مصدر معتمد',AGENT_SETTINGS_CHANGED:'تغيّر الإعداد',AGENT_HUMAN_TAKEOVER:'استلام بشري',AGENT_DOCUMENT_HANDOFF:'استلام مستندات',AGENT_OPT_OUT:'إيقاف بطلب العميل',AGENT_INACTIVE:'الوكيل غير نشط'};
 const replyLabels={greet:'الترحيب',certificate:'السؤال عن الشهادة',subject:'السؤال عن التخصص',university:'السؤال عن الجامعة',uncertain:'معلومة تحتاج مراجعة',finance:'تحويل السؤال المالي',human:'التحويل لموظف'};
 const feeLabels={application:'رسوم التقديم',ministry:'رسوم القيد للوزارة',university:'باقي رسوم القيد للجامعة',medical:'رسوم التأمين الطبي'};
 const deliveries={queued:'في الطابور',accepted:'قبلتها Meta',sent:'أُرسلت',delivered:'تم التسليم',read:'مقروءة',unknown:'النتيجة غير مؤكدة',failed:'فشل الإرسال',blocked:'توقف الإرسال'};
@@ -21,7 +21,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     <button type="button" class="btn" data-action="agent-settings">الإعدادات والتعليمات</button>
     ${d.enabled?'<button type="button" class="btn" data-action="agent-stop">إيقاف الوكيل الآن</button>':''}</div></section>
     <section class="metrics" aria-label="مؤشرات الوكيل">${metrics.map(([label,value])=>'<article class="metric"><span>'+e(label)+'</span><strong>'+e(value??0)+'</strong></article>').join('')}</section>
-    <section class="panel"><div class="panelhead"><h2>مصادر المعرفة</h2><button type="button" class="btn" data-action="agent-source">إضافة سؤال ومصدر</button></div>
+    <section class="panel"><div class="panelhead"><h2>مصادر المعرفة</h2><div class="actions"><button type="button" class="btn" data-action="agent-website-import">استيراد من موقع الشركة</button><button type="button" class="btn" data-action="agent-source">إضافة سؤال ومصدر</button></div></div>
     <p class="sub">راجع الإجابة ورابطها وتاريخ صلاحيتها قبل اعتمادها. المصادر المنتهية لا تُستخدم.</p>
     ${d.sources.map(source=>`<article class="fieldcard"><div><b>${e(source.title)}</b><p class="sub">${e(source.question)}</p>
       <p>${e(source.answer)}</p><p class="sub">${e({draft:'مسودة',approved:'معتمد',disabled:'موقوف'}[source.status])} · آخر تحديث ${e(date(source.updated_at))}${source.reviewed_until?' · صالح حتى '+e(date(source.reviewed_until)):''}${source.reviewer?' · '+e(source.reviewer):''}</p>
@@ -41,7 +41,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
   function preview(){
     const form=modal('اختبار الوكيل', `<p class="sub">استخدم رسالة وتعليمات اصطناعية أو عامة. هذه الشاشة لا ترسل شيئًا على واتساب.</p>
       <label>رسالة الاختبار<textarea name="body" rows="4" maxlength="1600" required></textarea></label>
-      ${dashboard.provider_ready?'<label>تعليمات تجريبية غير محفوظة<textarea name="instructions" rows="3" maxlength="1500">'+e(dashboard.instructions)+'</textarea></label><label><input type="checkbox" name="provider"> استخدم المزوّد لتصنيف كلمات الموضوع. أؤكد أن الرسالة اصطناعية والتعليمات عامة.</label>':''}
+      ${dashboard.provider_ready?'<label>تعليمات تجريبية غير محفوظة<textarea name="instructions" rows="3" maxlength="1500">'+e(dashboard.instructions)+'</textarea></label><label><input type="checkbox" name="provider"> استخدم المزوّد لاختيار المعلومات المرتبطة بالسؤال. أؤكد أن الرسالة اصطناعية والتعليمات عامة.</label>':''}
       <div data-agent-preview role="status"></div>`,'جرّب الرد');
     form.addEventListener('submit',async event=>{
       event.preventDefault();
@@ -78,7 +78,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
       const d=dashboard;
       const candidates=d.candidates.length===1?'<option value="'+e(d.candidates[0].id)+'" '+(d.pilot_contact_id===d.candidates[0].id?'selected':'')+'>'+e(d.candidates[0].name)+' · ‎••'+e(d.candidates[0].suffix)+'</option>':'';
       const form=modal('إعدادات وتعليمات الوكيل',`<label>تعليمات عامة للوكيل<textarea name="instructions" rows="4" maxlength="1500">${e(d.instructions)}</textarea></label>
-       <p class="sub">اكتب نطاق الإجابة وكيف يختار المعلومة. لتحديد الكلام الذي يراه العميل اكتب صياغتك في الردود التالية أو في مصدر معرفة معتمد.</p>
+       <p class="sub">حدّد نطاق الإجابة وأسلوب الأسئلة. الوكيل يربط المقتطفات المعتمدة ويستخدم ردود المتابعة التي تختارها.</p>
        <details><summary>الردود التي أريد الوكيل يقولها</summary>${Object.entries(replyLabels).map(([key,label])=>'<label>'+e(label)+'<textarea name="reply_'+key+'" rows="2" maxlength="420" placeholder="'+e(d.default_replies[key])+'">'+e(d.replies[key]||'')+'</textarea></label>').join('')}</details>
        <label>عبارات ممنوع قولها<textarea name="forbidden" rows="4" maxlength="1200" placeholder="اكتب عبارة واحدة في كل سطر">${e(d.forbidden.join('\n'))}</textarea></label>
        <p class="sub">العبارات الممنوعة تُفحص قبل الإرسال. رابط التسجيل يُرسل في أول تواصل فقط، وتستمر المتابعة على نفس الطلب. أضف الرسوم الرسمية من مصادر المعرفة بعد مراجعتها.</p>
@@ -89,6 +89,33 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
        ${d.candidates.length===1?'':'<p class="sub">التفعيل معلق إلى أن يتوفر تطابق فريد لسجل الاختبار.</p>'}
        <label><input type="checkbox" name="enabled" ${d.enabled?'checked':''} ${d.provider_ready?'':'disabled'}> تشغيل الوكيل على محادثة واتساب التجريبية</label>`);
       bindForm(form,v=>api('/customer-agent/settings','PATCH',{enabled:v.has('enabled'),instructions:v.get('instructions'),forbidden:v.get('forbidden'),replies:Object.fromEntries(Object.keys(replyLabels).map(key=>[key,v.get('reply_'+key)])),pilot_name:v.get('pilot_name'),pilot_suffix:v.get('pilot_suffix'),pilot_contact_id:v.get('pilot_contact_id')}));
+      return true;
+    }
+    if(name==='agent-website-import'){
+      const form=modal('استيراد المعرفة من الموقع',`<label>رابط صفحة من موقع ميدل إيست<input dir="ltr" name="url" type="url" value="https://mideastedu-eg.com/" required></label>
+        <button type="button" class="btn small" data-load-excerpts>جلب المقتطفات</button>
+        <p class="sub">تُحفظ المقتطفات المختارة كمسودات. راجعها واعتمدها ليستخدمها الوكيل.</p>
+        <div data-website-drafts aria-live="polite"></div>`,'حفظ المسودات');
+      const results=form.querySelector('[data-website-drafts]'),loadButton=form.querySelector('[data-load-excerpts]');
+      let preview=null;
+      const clear=()=>{preview=null;results.textContent='';};
+      form.elements.url.addEventListener('input',clear);
+      loadButton.addEventListener('click',async()=>{
+        const url=form.elements.url.value;
+        loadButton.disabled=true;preview=null;results.textContent='جارٍ جلب الصفحة…';
+        try{
+          const value=await api('/customer-agent/sources/website-preview','POST',{url});
+          if(form.elements.url.value!==url)return;
+          preview=value;
+          results.innerHTML=value.drafts.map(({title,answer},i)=>`<label class="fieldcard"><input type="checkbox" name="draft" value="${i}" checked><span><b>${e(title)}</b><br>${e(answer)}</span></label>`).join('')||'<p>مفيش مقتطفات جاهزة للمراجعة من الصفحة دي.</p>';
+        }catch(error){if(form.elements.url.value===url)results.textContent=error.message;}
+        finally{loadButton.disabled=false;}
+      });
+      bindForm(form,async values=>{
+        const drafts=values.getAll('draft').map(index=>preview?.drafts[Number(index)]).filter(Boolean);
+        if(!drafts.length)throw new Error('اجلب الصفحة واختر مقتطفًا واحدًا على الأقل');
+        await api('/customer-agent/sources/website-import','POST',{url:preview.url,drafts});
+      });
       return true;
     }
     if(name==='agent-source'){

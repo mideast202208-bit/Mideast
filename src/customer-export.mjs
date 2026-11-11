@@ -1,6 +1,8 @@
 import {deflateRawSync,crc32} from 'node:zlib';
 import {fail,text,audit} from './service.mjs';
 import {filterRecordsBySearch} from '../public/student-records.js';
+import {cairoDay} from '../public/chat-ui.js';
+export {cairoDay};
 
 const sourceNames={manual:'يدوي',website:'الموقع',whatsapp:'واتساب',facebook:'فيسبوك',instagram:'إنستجرام',referral:'ترشيح',other:'أخرى'};
 export const customerExportColumns=['اسم العميل','حالة العميل (أحدث فرصة)','الفرصة الأحدث','حالات الفرص المرتبطة','حالات ملفات الطلاب','الخدمات المطلوبة','الهاتف','البريد الإلكتروني','المسؤول','المصدر','مهام مفتوحة','تاريخ الإضافة (القاهرة)','آخر تحديث (القاهرة)'];
@@ -17,18 +19,16 @@ function zip(parts){
  const directory=Buffer.concat(central),end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50,0);end.writeUInt16LE(Object.keys(parts).length,8);end.writeUInt16LE(Object.keys(parts).length,10);end.writeUInt32LE(directory.length,12);end.writeUInt32LE(offset,16);
  return Buffer.concat([...local,directory,end]);
 }
-export function cairoDay(value=new Date()){
- const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';
- const p=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date).map(v=>[v.type,v.value]));return p.year+'-'+p.month+'-'+p.day;
-}
 const dateCell=value=>{const day=cairoDay(value);return day?Math.round(Date.parse(day+'T00:00:00Z')/86400000)+25569:null;};
 
 export function customerExportRows(db,user,input={}){
  if(user.role!=='admin')fail(403,'تصدير بيانات العملاء للمالك');
  const scope=input.scope||'all';if(!['all','filtered'].includes(scope))fail(400,'اختر نطاق التصدير');
  const query=text(input.query??'','البحث',160,false);
+ const createdOn=input.created_on??'';
+ if(createdOn&&(typeof createdOn!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(createdOn)||cairoDay(createdOn+'T12:00:00Z')!==createdOn))fail(400,'اختر تاريخ إضافة صحيحًا');
  const contacts=db.prepare('SELECT * FROM contacts ORDER BY created_at DESC,rowid DESC').all();
- const chosen=scope==='filtered'?filterRecordsBySearch(contacts,query):contacts;
+ const chosen=scope==='filtered'?filterRecordsBySearch(contacts.filter(c=>!createdOn||cairoDay(c.created_at)===createdOn),query):contacts;
  const stages=new Map(db.prepare('SELECT stage_key,label FROM pipeline_stages').all().map(s=>[s.stage_key,s.label]));
  const owners=new Map(db.prepare('SELECT id,name FROM users').all().map(u=>[u.id,u.name]));
  const leads=db.prepare('SELECT * FROM leads ORDER BY updated_at DESC,created_at DESC,rowid DESC').all();

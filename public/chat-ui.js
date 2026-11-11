@@ -1,4 +1,14 @@
 import {brandIcon} from './brand-icons.js';
+
+const cairoDateFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'});
+export function cairoDay(value=new Date()){
+  if(value==null||value==='')return '';
+  const date=new Date(value);
+  if(!Number.isFinite(date.getTime()))return '';
+  const parts=Object.fromEntries(cairoDateFormatter.formatToParts(date).map(({type,value})=>[type,value]));
+  return parts.year+'-'+parts.month+'-'+parts.day;
+}
+
 export const chatEscape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const statusNames={received:'واردة',queued:'في طابور الإرسال',accepted:'قبلتها Meta',sent:'أُرسلت',delivered:'تم التسليم',read:'مقروءة',failed:'تعذر الإرسال',error:'تعذر الإرسال',unknown:'نتيجة غير مؤكدة',blocked:'محجوبة'};
 const format=(value,options)=>new Date(value).toLocaleString('ar-EG',{...options,timeZone:'Africa/Cairo'});

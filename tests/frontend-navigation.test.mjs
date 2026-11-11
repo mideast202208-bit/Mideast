@@ -53,6 +53,13 @@ test('navigation closes after changing page; sidebar search and existing record 
   const doc=app.document;doc.querySelector('[data-navigation-toggle]').click();doc.querySelector('.primary-navigation [data-page="contacts"]').click();
   await app.wait(()=>doc.querySelector('#content h1')?.textContent==='العملاء');
   assert.equal(doc.querySelector('[data-navigation-toggle]').getAttribute('aria-expanded'),'false');assert.equal(doc.querySelector('#workspace-main').inert,false);assert.equal(doc.activeElement,doc.querySelector('#content h1'));
+  assert.equal(doc.querySelector('[data-id="today"]').getAttribute('aria-pressed'),'true');
+  assert.equal(doc.querySelectorAll('[data-record-id]').length,0);
+  const day=doc.querySelector('[data-contact-date]');day.value='2026-11-01';
+  day.dispatchEvent(new app.dom.window.Event('change',{bubbles:true}));
+  assert.equal(doc.querySelectorAll('[data-record-id]').length,1);
+  doc.querySelector('[data-action="contact-date"]:not([data-id])').click();
+  assert.equal(doc.querySelectorAll('[data-record-id]').length,1);
   const search=doc.querySelector('#search');search.value='No matching fictional record';search.dispatchEvent(new app.dom.window.Event('input',{bubbles:true}));assert.ok(doc.querySelector('#content').textContent.includes('لا توجد نتائج مطابقة'));
   doc.querySelector('[data-id="contacts|table"]').click();await app.wait(()=>doc.querySelector('[data-record-mode="table"]'));assert.equal(doc.querySelector('#search').value,'No matching fictional record');assert.ok(doc.querySelector('#primary-navigation-sidebar #search'));assert.equal(doc.querySelectorAll('#search').length,1);
   const current=doc.querySelector('#search');current.value='';current.dispatchEvent(new app.dom.window.Event('input',{bubbles:true}));assert.equal(doc.querySelectorAll('[data-record-id]').length,1);assert.ok(doc.querySelector('[data-action="edit-contact"]'));

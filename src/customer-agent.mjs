@@ -2,14 +2,14 @@ import {transaction} from './db.mjs';
 import {hash,windowOpen} from './security.mjs';
 import {audit,fail,getContact,manager,now,text,uid} from './service.mjs';
 import {normalizeSearch} from './international.mjs';
-import {agentAllowsReply,agentCandidates,agentCanQualify,agentDecision,agentIntent,agentModel,agentReplies,agentReplyKeys,approvedWebsiteUrl,chooseAgentSource,officialFeeAnswer,officialFeeTopic,registrationIntro,requestsAgentRegistration,safeAgentAnswer} from './customer-agent-policy.mjs';
+import {agentAllowsReply,agentCandidates,agentCanQualify,agentDecision,agentIntent,agentModel,agentReplies,agentReplyKeys,approvedWebsiteUrl,chooseAgentSource,knowledgeReply,officialFeeAnswer,officialFeeTopic,registrationIntro,requestsAgentRegistration,safeAgentAnswer} from './customer-agent-policy.mjs';
 import {registrationLink,resolveRegistrationLink,whatsappRegistrationOpportunity} from './intake-links.mjs';
 import {previewWebsiteKnowledge} from './customer-agent-website.mjs';
 import {requestWhatsAppFiles} from './request-documents.mjs';
 
 const settingsKey = 'customer_agent.settings';
 const handoffReasons = {
-  finance:'استفسار مالي', human:'طلب موظف أو شكوى', uncertain:'المعلومة تحتاج تحققًا',
+  finance:'سؤال عن أتعاب المكتب أو الدفع', human:'طلب موظف أو شكوى', uncertain:'المعلومة تحتاج تحققًا',
   sensitive:'بيانات خاصة تحتاج مراجعة', documents:'مستندات واردة تحتاج مراجعتك', provider:'تعذر تشغيل مزود التصنيف', window:'انتهت نافذة واتساب',
   staff:'استلام بشري', stop:'طلب إيقاف المتابعة'
 };
@@ -61,7 +61,7 @@ export function trackedCustomerAgentLead(db,contact,phoneId){
 }
 
 function activeSources(db,cfg){
-  return db.prepare("SELECT id,title,question,answer,url,reviewed_until FROM customer_agent_sources WHERE status='approved' AND reviewed_until>? ORDER BY updated_at DESC LIMIT 100").all(now())
+  return db.prepare("SELECT id,title,question,answer,url,reviewed_until FROM customer_agent_sources WHERE status='approved' AND reviewed_until>? ORDER BY updated_at DESC").all(now())
     .filter(source=>agentAllowsReply(source.answer,cfg.forbidden))
     .map(source=>({...source,official_fee:Object.hasOwn(cfg.fees,source.id)?cfg.fees[source.id]:null}));
 }
@@ -184,10 +184,15 @@ function verifiedRegistrationUrl(db,job,value,key,origin){
   }catch{return false;}
 }
 
-function safeReply(db,cfg,reason,body){
+function safeReply(db,cfg,reason,body,evidence){
   if(!agentAllowsReply(body,cfg.forbidden))return false;
   if(reason==='official_fee')return activeSources(db,cfg).some(entry=>entry.official_fee&&officialFeeAnswer(entry.official_fee)===body&&entry.answer===body);
-  return safeAgentAnswer(body)&&(reason!=='approved_source'||activeSources(db,cfg).some(entry=>!entry.official_fee&&entry.answer===body));
+  if(!safeAgentAnswer(body))return false;
+  if(reason!=='approved_source')return true;
+  const active=activeSources(db,cfg).filter(entry=>!entry.official_fee);
+  if(!Array.isArray(evidence?.source_ids))return active.some(entry=>entry.answer===body);
+  const question=evidence.followup?(cfg.replies[evidence.followup]||agentReplies[evidence.followup]):'';
+  return knowledgeReply(active,evidence.source_ids,question)===body;
 }
 
 export function customerAgentSendAllowed(db,env,messageId,key,origin){
@@ -199,15 +204,16 @@ export function customerAgentSendAllowed(db,env,messageId,key,origin){
   const current=thread(db,job.conversation_id,job.phone_id),cfg=settings(db);
   const source=db.prepare('SELECT body FROM messages WHERE id=?').get(messageId)?.body;
   const [reply,link,...extra]=String(source??'').split(registrationSeparator);
+  const evidence=job.reason==='approved_source'?JSON.parse(db.prepare("SELECT metadata FROM audit WHERE action='agent_reply' AND entity='message' AND entity_id=?").get(messageId)?.metadata||'{}'):null;
   return job.revision===cfg.revision&&['active','handoff'].includes(current?.state)&&
     pilotEligible(db,env,cfg,{id:job.contact_id,phone:job.phone},job.phone_id)&&windowOpen(job.received_at)&&
-    safeReply(db,cfg,job.reason,reply)&&!extra.length&&
+    safeReply(db,cfg,job.reason,reply,evidence)&&!extra.length&&
     (link===undefined||agentAllowsReply(registrationIntro,cfg.forbidden)&&verifiedRegistrationUrl(db,job,link,key,origin));
 }
 
 function saveOutcome(db,job,decision,cfg,key,origin){
   const row=thread(db,job.conversation_id,job.phone_id);
-  const nextStep=nextLabels[decision.next]||'المتابعة حسب رد العميل';
+  const nextStep=nextLabels[decision.next]||(decision.reason==='qualify'?'وضح خطوات التقديم حسب اختيار الطالب':'المتابعة حسب رد العميل');
   const reasonLabel=handoffReasons[decision.reason];
   const subject=decision.facts.subject,university=decision.facts.university,certificate=decision.facts.certificate;
   let summary=[certificate&&'الشهادة: '+certificate,subject&&'التخصص: '+subject,university&&'الجامعة: '+university].filter(Boolean).join(' · ');
@@ -230,7 +236,7 @@ function saveOutcome(db,job,decision,cfg,key,origin){
       decision.state==='handoff'?'يراجع الموظف المحادثة ويتابع · '+reasonLabel:nextStep,taskId,now(),job.conversation_id,job.phone_id);
   let outbound=null;
   let reply=decision.reply;
-  if(reply&&safeReply(db,cfg,decision.reason,reply)&&windowOpen(job.received_at)){
+  if(reply&&safeReply(db,cfg,decision.reason,reply,decision)&&windowOpen(job.received_at)){
     const first=!db.prepare(`SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.direction='in'
       AND m.rowid<(SELECT rowid FROM messages WHERE id=?) LIMIT 1`).get(job.conversation_id,job.inbound_id);
     const firstOrdinary=first&&['greet','qualify','approved_source','uncertain','registration_link'].includes(decision.reason)&&['greet','lookup'].includes(agentIntent(job.body,job.kind));
@@ -246,7 +252,7 @@ function saveOutcome(db,job,decision,cfg,key,origin){
     db.prepare(`INSERT INTO messages(id,conversation_id,direction,kind,body,payload,status,created_at)
       VALUES(?,?,'out','text',?,?,'queued',?)`).run(outbound,job.conversation_id,reply,JSON.stringify({type:'text',text:{body:reply}}),now());
     db.prepare('INSERT INTO message_accounts VALUES(?,?)').run(outbound,job.phone_id);
-    audit(db,null,'agent_reply','message',outbound,{channel:'whatsapp',reason:decision.reason,source_id:decision.source_id??null});
+    audit(db,null,'agent_reply','message',outbound,{channel:'whatsapp',reason:decision.reason,source_id:decision.source_id??null,source_ids:decision.source_ids,followup:decision.followup});
   }
   db.prepare("UPDATE customer_agent_jobs SET status='done',reason=?,outbound_id=? WHERE inbound_id=?").run(decision.reason,outbound,job.inbound_id);
   audit(db,null,decision.state==='handoff'?'agent_handoff':'agent_handled','lead',job.lead_id,{reason:decision.reason});
@@ -255,6 +261,11 @@ function saveOutcome(db,job,decision,cfg,key,origin){
 function customizeDecision(decision,cfg){
   const key=decision.reason==='qualify'?decision.next:decision.reason;
   if(cfg.replies[key])decision={...decision,reply:cfg.replies[key]};
+  if(decision.followup&&cfg.replies[decision.followup]){
+    const reply=decision.reply.slice(0,-agentReplies[decision.followup].length)+cfg.replies[decision.followup];
+    if(safeAgentAnswer(reply))decision={...decision,reply};
+    else decision={...decision,reply:decision.reply.slice(0,-agentReplies[decision.followup].length).trimEnd(),followup:undefined};
+  }
   if(decision.reply&&!agentAllowsReply(decision.reply,cfg.forbidden)){
     return {...decision,reason:'uncertain',state:'handoff',reply:agentAllowsReply(agentReplies.uncertain,cfg.forbidden)?agentReplies.uncertain:null};
   }
@@ -299,7 +310,8 @@ export async function processCustomerAgent(db,env,transport,key,origin){
     if(db.prepare('SELECT status FROM customer_agent_jobs WHERE inbound_id=?').get(job.inbound_id).status!=='planning')return;
     const fresh=db.prepare('SELECT id,phone FROM contacts WHERE id=?').get(job.contact_id);
     if(!safeToProcess(db,env,job,settings(db),fresh)){cancel('AGENT_INACTIVE');return;}
-    if(decision.source_id&&!activeSources(db,cfg).some(source=>source.id===decision.source_id)){
+    const activeIds=new Set(activeSources(db,cfg).map(source=>source.id));
+    if((decision.source_ids??[decision.source_id]).some(id=>id&&!activeIds.has(id))){
       decision={reason:'uncertain',state:'handoff',reply:agentReplies.uncertain,facts:prior};
     }
     saveOutcome(db,job,customizeDecision(decision,cfg),cfg,key,origin);
@@ -380,6 +392,31 @@ function updateSource(db,user,input){
   return {id};
 }
 
+function importWebsiteDrafts(db,user,input){
+  const url=text(input.url,'صفحة الموقع',300);
+  if(!approvedWebsiteUrl(url))fail(400,'اختر صفحة عامة من موقع ميدل إيست الرسمي');
+  if(!Array.isArray(input.drafts)||!input.drafts.length||input.drafts.length>12)fail(400,'اختر حتى اثني عشر مقتطفًا من الصفحة');
+  const drafts=input.drafts.map(item=>{
+    const title=text(item?.title,'عنوان المقتطف',160);
+    const answer=text(item?.answer,'نص المقتطف',600);
+    if(!safeAgentAnswer(answer))fail(400,'المقتطف يحتاج مراجعة قبل حفظه كمصدر');
+    return {title,answer};
+  });
+  const existing=db.prepare('SELECT 1 FROM customer_agent_sources WHERE url=? AND answer=?');
+  const insert=db.prepare("INSERT INTO customer_agent_sources(id,title,question,answer,url,status,updated_at) VALUES(?,?,?,?,?,'draft',?)");
+  return transaction(db,()=>{
+    let added=0;
+    for(const {title,answer} of drafts){
+      if(existing.get(url,answer))continue;
+      const id=uid();
+      insert.run(id,title,title,answer,url,now());
+      audit(db,user,'agent_source_draft','customer_agent',id,{source:'website'});
+      added++;
+    }
+    return {added};
+  });
+}
+
 function agentDashboard(db,env){
   const cfg=settings(db);
   const candidates=pilotCandidates(db,cfg).map(row=>({id:row.id,name:row.name,suffix:cfg.pilot_suffix}));
@@ -448,6 +485,7 @@ export async function handleCustomerAgent({db,user,path,method,req,res,jsonBody,
     return respond(agentDashboard(db,env));
   }
   if(path==='/api/customer-agent/sources'&&method==='POST')return respond(updateSource(db,user,await jsonBody(req)),201);
+  if(path==='/api/customer-agent/sources/website-import'&&method==='POST')return respond(importWebsiteDrafts(db,user,await jsonBody(req)),201);
   if(path==='/api/customer-agent/sources/website-preview'&&method==='POST'){
     const input=await jsonBody(req);
     return respond(await previewWebsiteKnowledge(text(input.url,'صفحة الموقع',300),transport));
@@ -458,7 +496,7 @@ export async function handleCustomerAgent({db,user,path,method,req,res,jsonBody,
     const cfg=settings(db),sources=activeSources(db,cfg),sourceList=sources.filter(row=>!row.official_fee);
     const candidates=agentCandidates(body,sourceList);
     const qualifies=agentCanQualify(body,sourceList);
-    let choice=candidates.length?undefined:qualifies?'qualify':'uncertain';
+    let choice=candidates.length?undefined:qualifies?'qualify':undefined;
     if(input.provider===true){
       if(!providerReady(env))fail(409,'اختبار المزود يحتاج موافقة وإعداد الخادم');
       if(input.synthetic!==true)fail(400,'أكد أن رسالة الاختبار وتعليماتها اصطناعية');

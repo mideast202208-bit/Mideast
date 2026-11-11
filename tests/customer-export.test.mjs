@@ -36,6 +36,17 @@ test('one row per customer preserves latest opportunity status, renamed stages, 
   assert.equal(db.prepare('SELECT COUNT(*) n FROM contacts').get().n,2);assert.equal(db.prepare('SELECT COUNT(*) n FROM leads WHERE contact_id=?').get(first.id).n,2);
  }finally{db.close();}
 });
+test('the selected customer date uses Cairo midnight and combines with search',()=>{
+ const {db,users,first,second}=setup();
+ try{
+  const date=db.prepare('UPDATE contacts SET created_at=? WHERE id=?');
+  date.run('2026-11-10T22:00:00.000Z',first.id);
+  date.run('2026-11-10T21:59:59.999Z',second.id);
+  assert.deepEqual(customerExportRows(db,users.admin,{scope:'filtered',created_on:'2026-11-11'}).rows.map(row=>row[0]),['أحمد علي']);
+  assert.equal(customerExportRows(db,users.admin,{scope:'filtered',created_on:'2026-11-11',query:'بلا فرصة'}).rows.length,0);
+  assert.throws(()=>customerExportRows(db,users.admin,{scope:'filtered',created_on:'2026-02-30'}),/تاريخ/);
+ }finally{db.close();}
+});
 test('native XLSX is a valid ZIP with Arabic text, frozen headings, filters, numeric dates and literal formula-like input',()=>{
  const {db,users}=setup();try{
   const rows=customerExportRows(db,users.admin).rows;rows[0][0]='=HYPERLINK("https://example.invalid")\u0000 <اسم> 😀';const bytes=customerWorkbook(rows),files=unzip(bytes);

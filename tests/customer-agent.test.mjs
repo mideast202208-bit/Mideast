@@ -13,7 +13,7 @@ const pilotPhone='+12025550189';
 const env={CUSTOMER_AGENT_OPENAI_APPROVED:'1',CUSTOMER_AGENT_OPENAI_KEY:'synthetic-agent-credential'};
 const dueDate=()=>new Date(Date.now()+86400000).toISOString().slice(0,10);
 const source={id:'website-postgraduate',status:'approved',reviewed_until:dueDate()};
-const response=choice=>new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({choice})}]}]}),{status:200});
+const response=(choice,related)=>new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({choice,related})}]}]}),{status:200});
 
 function session(f,user){
   const cookie=token(),csrf=token();
@@ -107,6 +107,9 @@ test('an approved pilot reuses its opportunity, grounds replies and hands financ
     const task=f.db.prepare("SELECT owner_id FROM tasks WHERE title LIKE 'وكيل خدمة العملاء%'").get();
     assert.equal(task.owner_id,f.users.owner.id);
     assert.equal(f.db.prepare("SELECT COUNT(*) n FROM crm_activity WHERE kind='agent_handoff'").get().n,1);
+    const alerts=(await request(f,'/api/crm-inbox',admin)).data.activity;
+    assert.equal(alerts.find(row=>row.kind==='agent_finance')?.lead_id,thread.lead_id);
+    assert.ok(!(await request(f,'/api/crm-inbox',staff)).data.activity.some(row=>row.kind==='agent_finance'));
     await inbound(f,'pilot-finance-repeat','عايز أعرف الأسعار مرة تانية.');
     await f.app.agentTick();
     assert.equal(outgoing(f).length,2);assert.equal(count(f,'leads'),1);
@@ -271,7 +274,7 @@ test('WhatsApp attachments before and after registration are filed once on the t
 test('owner can review a website excerpt, block exact phrases, and distinguish approved official fees from office fees',async()=>{
   const f=await inboundFixture({environment:env,transport:async url=>{
     assert.equal(url,'https://mideastedu-eg.com/ourservices');
-    return new Response('<title>خدماتنا</title><nav><p>القائمة</p></nav><main><h1>الدراسة في مصر</h1><p>نساعدك في اختيار الجامعة.</p><script>secret()</script></main>',{headers:{'content-type':'text/html'}});
+    return new Response('<title>خدماتنا</title><nav><p>القائمة</p></nav><main><h1>الدراسة في مصر</h1><p>نساعدك في اختيار الجامعة.</p><p>نساعدك في اختيار الجامعة المناسبة لتخصصك وتجهيز طلب التقديم.</p><p>أتعاب المكتب مائة جنيه.</p><script>secret()</script></main>',{headers:{'content-type':'text/html'}});
   }});
   try{
     const admin=session(f,f.users.owner),staff=session(f,f.users.assigned);
@@ -280,6 +283,11 @@ test('owner can review a website excerpt, block exact phrases, and distinguish a
     assert.equal((await request(f,website,admin,{url:'https://mideastedu-eg.com.evil.test/'})).status,400);
     const imported=await request(f,website,admin,{url:'https://mideastedu-eg.com/ourservices'});
     assert.equal(imported.status,200);assert.match(imported.data.excerpt,/نساعدك/);assert.doesNotMatch(imported.data.excerpt,/القائمة|secret/);
+    assert.equal(imported.data.drafts.length,1);
+    const drafts=endpoint+'/sources/website-import',input={url:imported.data.url,drafts:imported.data.drafts};
+    assert.equal((await request(f,drafts,admin,input)).data.added,1);
+    assert.equal((await request(f,drafts,admin,input)).data.added,0);
+    assert.equal(f.db.prepare('SELECT status FROM customer_agent_sources WHERE answer=?').get(input.drafts[0].answer).status,'draft');
     assert.equal((await request(f,endpoint+'/settings',admin,{enabled:false,forbidden:'متاح فورًا',replies:{greet:'التقديم متاح فورا'}},'PATCH')).status,200);
     assert.equal((await request(f,endpoint+'/preview',admin,{body:'السلام عليكم'})).data.reason,'uncertain');
     const fee={title:'بند تقديم رسمي',question:'رسوم التقديم',url:'https://mideastedu-eg.com/tuition-fees-2026',status:'approved',reviewed_until:dueDate(),official_fee:{kind:'application',amount:17,currency:'USD'}};
@@ -291,5 +299,38 @@ test('owner can review a website excerpt, block exact phrases, and distinguish a
     assert.equal((await request(f,endpoint+'/sources',admin,{...fee,official_fee:{...fee.official_fee,amount:27}})).status,201);
     assert.equal((await request(f,endpoint+'/preview',admin,{body:'رسوم التقديم كم؟'})).data.reason,'finance');
     assert.equal(f.externalCalls,1);
+  }finally{await f.close();}
+});
+
+test('one WhatsApp answer combines separately approved topics and preserves conversational context',async()=>{
+  const documents={id:'website-documents',status:'approved',reviewed_until:dueDate()};
+  const f=await inboundFixture({environment:env,transport:async(url,options)=>{
+    assert.match(url,/^https:\/\/api\.openai\.com\//);
+    const payload=JSON.parse(options.body);
+    assert.doesNotMatch(payload.input,/حساب تجريبي|كيف يتم/);
+    return response(source.id,[documents.id]);
+  }});
+  try{
+    const admin=session(f,f.users.owner),id=addPilot(f);
+    for(const item of [source,documents])assert.equal((await request(f,endpoint+'/sources',admin,item)).status,201);
+    assert.equal((await prepare(f,admin)).status,200);
+    assert.equal((await enable(f,admin,id)).status,200);
+    await inbound(f,'combined-knowledge','كيف يتم الماجستير وتصديق الوثائق؟');
+    await f.app.agentTick();
+    assert.match(outgoing(f)[0].body,/الماجستير/);
+    assert.match(outgoing(f)[0].body,/تصديق/);
+    const audit=JSON.parse(f.db.prepare("SELECT metadata FROM audit WHERE action='agent_reply'").get().metadata);
+    assert.deepEqual(audit.source_ids,[source.id,documents.id]);
+    await sendNext(f.db,f.app.config,async()=>new Response(JSON.stringify({messages:[{id:'synthetic-combined'}]})),f.key,f.env,f.origin);
+    assert.equal(outgoing(f)[0].status,'accepted');
+    await inbound(f,'office-fee-phrase','كام للمكتب؟');
+    await f.app.agentTick();
+    assert.equal((await request(f,endpoint+'/contacts/'+id,admin)).data.reason,'finance');
+    assert.equal(outgoing(f).length,2);
+    const first=agentDecision('معايا ثانوية سودانية','text',[],{});
+    const second=agentDecision('طب الأسنان','text',[],first.facts);
+    const third=agentDecision('عين شمس','text',[],second.facts);
+    assert.deepEqual(third.facts,{certificate:'الثانوية السودانية',subject:'طب الأسنان',university:'عين شمس'});
+    assert.equal(third.state,'handled');
   }finally{await f.close();}
 });
