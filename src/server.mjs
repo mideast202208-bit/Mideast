@@ -165,7 +165,8 @@ export function createApp(options = {}) {
         rateLimit('login:'+req.socket.remoteAddress,40,900000);
         rateLimit('account:'+email,10,900000);
         const row=db.prepare('SELECT * FROM users WHERE email=? AND active=1').get(email);
-        if(!row || !await checkPassword(input.password,row.password))fail(401,'البريد أو كلمة المرور غير صحيحة');
+        if(!row || !await checkPassword(input.password,row.password) ||
+          !db.prepare('SELECT 1 FROM users WHERE id=? AND active=1 AND password=? AND role=?').get(row.id,row.password,row.role))fail(401,'البريد أو كلمة المرور غير صحيحة');
         if(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(row.id)?.enabled && !verifyFactor(db,row.id,input.code,secretKey))fail(401,'أدخل رمز المصادقة من تطبيقك؛ لا يمكن إعادة استخدام الرمز');
         const value=token(),csrf=token();
         db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now());
@@ -181,6 +182,23 @@ export function createApp(options = {}) {
       if(path==='/api/me' && method==='GET'){sendJson(res,200,{user:safeUser(user),csrf:user.csrf});return;}
       if(path==='/api/logout' && method==='POST'){
         db.prepare('DELETE FROM sessions WHERE hash=?').run(user.hash);
+        res.setHeader('Set-Cookie',`me_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${production?'; Secure':''}`);
+        sendJson(res,200,{ok:true});return;
+      }
+      if(path==='/api/security/password'&&method==='POST'){
+        rateLimit('password-change:'+user.id,8,900000);
+        const input=await jsonBody(req,8192);
+        if(typeof input.new_password!=='string'||input.new_password.length<12||input.new_password.length>256)fail(400,'كلمة المرور الجديدة من 12 إلى 256 حرفًا');
+        if(!await checkPassword(input.current_password,user.password))fail(400,'كلمة المرور الحالية غير صحيحة');
+        if(input.current_password===input.new_password)fail(400,'اختر كلمة مرور مختلفة عن الحالية');
+        const password=await hashPassword(input.new_password);
+        transaction(db,()=>{
+          authenticate(req,true);
+          const result=db.prepare('UPDATE users SET password=? WHERE id=? AND active=1 AND password=?').run(password,user.id,user.password);
+          if(!result.changes)fail(409,'تغيرت كلمة المرور؛ سجّل الدخول من جديد');
+          db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+          audit(db,user,'password_changed','user',user.id);
+        });
         res.setHeader('Set-Cookie',`me_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${production?'; Secure':''}`);
         sendJson(res,200,{ok:true});return;
       }
@@ -349,6 +367,7 @@ export function createApp(options = {}) {
       if(userMatch && method==='PATCH'){
         if(user.role!=='admin')fail(403,'للمالك فقط');const input=await jsonBody(req),target=db.prepare('SELECT * FROM users WHERE id=?').get(userMatch[1]);if(!target)fail(404,'المستخدم غير موجود');
         if(target.id===user.id && (input.active===false || (input.role && input.role!=='admin')))fail(400,'لا يمكنك إلغاء صلاحيتك الحالية');
+        if(target.id===user.id&&input.password)fail(400,'غيّر كلمة مرور حسابك من أمان الحساب');
         const role=input.role ?? target.role;if(!['admin','manager','agent','accountant'].includes(role))fail(400,'دور غير صالح');
         let password=target.password;if(input.password){try{password=await hashPassword(input.password);}catch(error){fail(400,error.message);}}
         transaction(db,()=>{db.prepare('UPDATE users SET role=?,active=?,password=? WHERE id=?').run(role,input.active===undefined?target.active:input.active?1:0,password,target.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(db,user,'updated','user',target.id);});

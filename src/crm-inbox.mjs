@@ -29,7 +29,11 @@ export function recordCrmIntake(db,{contactId,leadId,kind,eventId,source,waiting
 
 function moveContactRecords(db,id,next){
   db.prepare('UPDATE contacts SET owner_id=?,updated_at=? WHERE id=?').run(next,now(),id);
-  for(const table of ['leads','tasks','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(next,id);
+  for(const table of ['leads','tickets'])db.prepare(`UPDATE ${table} SET owner_id=? WHERE contact_id=?`).run(next,id);
+  db.prepare(`UPDATE tasks SET owner_id=? WHERE contact_id=? AND NOT EXISTS(
+    SELECT 1 FROM audit a WHERE a.entity='task' AND a.entity_id=tasks.id AND a.action='created'
+      AND json_extract(a.metadata,'$.source')='customer_agent' AND json_extract(a.metadata,'$.reason') IN('finance','documents')
+  )`).run(next,id);
   reassignContactRecords(db,id,next);
 }
 
@@ -64,8 +68,11 @@ export function crmFeed(db,user){
     WHERE l.stage NOT IN('won','lost') ORDER BY q.created_at,q.lead_id LIMIT 100`).all();
   const visibility=management?'1=1':"c.owner_id=? OR (q.contact_id IS NOT NULL AND a.kind<>'agent_handoff')";
   const scope=management?[]:[user.id];
-  const activity=db.prepare(`SELECT a.seq,a.kind,a.source,a.created_at${user.role==='admin'?',a.lead_id':''} FROM crm_activity a JOIN contacts c ON c.id=a.contact_id
-    LEFT JOIN crm_waiting q ON q.contact_id=c.id WHERE (${visibility}) AND (a.kind<>'agent_documents' OR ?) ORDER BY a.seq DESC LIMIT 50`).all(...scope,user.role==='admin'?1:0);
+  const activity=db.prepare(`SELECT a.seq,CASE WHEN a.kind='agent_handoff' AND j.reason='finance' THEN 'agent_finance' ELSE a.kind END AS kind,
+    a.source,a.created_at${user.role==='admin'?',a.lead_id':''} FROM crm_activity a JOIN contacts c ON c.id=a.contact_id
+    LEFT JOIN crm_waiting q ON q.contact_id=c.id
+    LEFT JOIN customer_agent_jobs j ON a.kind='agent_handoff' AND j.inbound_id=a.event_id
+    WHERE (${visibility}) AND ((a.kind<>'agent_documents' AND COALESCE(j.reason,'')<>'finance') OR ?) ORDER BY a.seq DESC LIMIT 50`).all(...scope,user.role==='admin'?1:0);
   const metrics=management?db.prepare(`SELECT u.id,u.name,
     (SELECT COUNT(*) FROM leads l WHERE l.owner_id=u.id AND l.stage NOT IN('won','lost') AND NOT EXISTS (SELECT 1 FROM crm_waiting w WHERE w.contact_id=l.contact_id)) AS open,
     (SELECT COUNT(*) FROM tasks t WHERE t.owner_id=u.id AND t.status='open' AND t.due_at<? AND NOT EXISTS (SELECT 1 FROM crm_waiting w WHERE w.contact_id=t.contact_id)) AS overdue,

@@ -1,28 +1,34 @@
 import {parse} from 'parse5';
-import {approvedWebsiteUrl} from './customer-agent-policy.mjs';
+import {approvedWebsiteUrl,safeAgentAnswer} from './customer-agent-policy.mjs';
 import {fail} from './service.mjs';
 
 const excluded=new Set(['script','style','template','noscript','svg','iframe','nav','header','footer','button','form']);
 const clean=value=>String(value??'').replace(/\s+/gu,' ').trim();
 
 function extract(html){
-  let title='',description='';
-  const paragraphs=[];
-  const content=node=>node.nodeName==='#text'?node.value:excluded.has(node.tagName)?'':(node.childNodes??[]).map(content).join('');
+  let title='',description='',heading='';
+  const paragraphs=[],drafts=[];
+  const ignored=node=>excluded.has(node.tagName)||node.attrs?.some(a=>a.name==='hidden'||a.name==='aria-hidden'&&a.value==='true');
+  const content=node=>node.nodeName==='#text'?node.value:ignored(node)?'':(node.childNodes??[]).map(content).join('');
   function visit(node){
-    if(excluded.has(node.tagName)||node.attrs?.some(a=>a.name==='hidden'||a.name==='aria-hidden'&&a.value==='true'))return;
+    if(ignored(node))return;
     if(node.tagName==='title')title=clean(content(node));
     if(node.tagName==='meta'&&node.attrs?.some(a=>a.name==='name'&&a.value.toLowerCase()==='description'))description=clean(node.attrs.find(a=>a.name==='content')?.value);
-    if(node.tagName==='p'||/^h[1-4]$/.test(node.tagName??'')){
+    const isHeading=/^h[1-4]$/.test(node.tagName??'');
+    if(isHeading||node.tagName==='p'||node.tagName==='li'){
       const line=clean(content(node));
-      if(line&&!paragraphs.includes(line))paragraphs.push(line);
+      if(line&&!paragraphs.includes(line)){
+        paragraphs.push(line);
+        if(isHeading)heading=line;
+        else if(line.length>=30&&safeAgentAnswer(line)&&drafts.length<12)drafts.push({title:(heading||title||'صفحة من موقع الشركة').slice(0,160),answer:line});
+      }
     }
     for(const child of node.childNodes??[])visit(child);
   }
   visit(parse(html));
   const excerpt=[...new Set([description,...paragraphs].filter(Boolean))].join('\n');
   if(!excerpt)fail(422,'الصفحة لا تعرض نصًا قابلًا للاستيراد؛ أضف الإجابة بعد مراجعتها يدويًا');
-  return {title:(title||paragraphs[0]||'صفحة من موقع الشركة').slice(0,160),excerpt:excerpt.slice(0,5000)};
+  return {title:(title||paragraphs[0]||'صفحة من موقع الشركة').slice(0,160),excerpt:excerpt.slice(0,5000),drafts};
 }
 
 export async function previewWebsiteKnowledge(value,transport=fetch){
