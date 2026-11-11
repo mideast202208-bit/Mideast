@@ -2,16 +2,17 @@ import {normalizeSearch} from './international.mjs';
 
 export const agentModel = 'gpt-6-luna';
 export const agentReplies = {
-  finance: 'هحوّل سؤالك للإدارة علشان يوضحوا لك التفاصيل حسب طلبك.',
-  human: 'هحوّلك لزميل من فريق ميدل إيست يكمل معاك.',
-  uncertain: 'هراجع المعلومة مع فريق ميدل إيست ونكمل معاك بعد التحقق.',
+  finance: 'أكيد، هحوّل سؤالك للإدارة عشان يوضحوا لك التفاصيل المناسبة لطلبك.',
+  human: 'طبعًا، هحوّلك لزميل من فريق ميدل إيست يكمل معاك ويساعدك.',
+  uncertain: 'خلّيني أراجع النقطة دي مع فريق ميدل إيست عشان نرد عليك بمعلومة دقيقة.',
   sensitive: 'هحوّلك للفريق لمراجعة طلبك. من فضلك ما تبعتش مستندات أو بيانات خاصة في المحادثة دي.',
-  greet: 'أهلًا بيك، أنا مساعد ميدل إيست. تحب أساعدك في التقديم، اختيار الجامعة، ولا في خدمة تانية؟',
+  greet: 'أهلًا وسهلًا، نورت ميدل إيست 🌿 أنا مساعدك في رحلة الدراسة في مصر. تحب نبدأ باختيار الجامعة ولا عندك سؤال عن التقديم؟',
+  welcome: 'أهلًا وسهلًا بيك في ميدل إيست 🌿',
   certificate: 'ممكن أعرف نوع الشهادة اللي معاك؟',
   subject: 'حابب تدرس إيه؟',
   university: 'في جامعة معينة في بالك؟'
 };
-export const agentReplyKeys=['greet','certificate','subject','university','uncertain','finance','human'];
+export const agentReplyKeys=['greet','welcome','certificate','subject','university','uncertain','finance','human'];
 export const registrationIntro='لو دي أول خطوة ليك، تقدر تكمّل بيانات التقديم هنا:';
 const officeFinance=/المكتب|اتعاب|عموله|باقه|باقات|خصم|استرد|فاتور|عرض سعر|خدمتكم|بتاخدوا|تاخدوا كام|\b(?:office|agency|refund|discount|invoice)\b/i;
 const officeFeeRequest=/(?:حق|حساب|مقابل|عموله|اتعاب) (?:المكتب|مكتبكم|ميدل ايست)|(?:كام|كم) (?:علي المكتب|للمكتب|علي الخدمه)|المكتب (?:بياخد|ياخد|بيكلف) كام|بتاخدوا كام|تاخدوا كام|هتاخدوا كام/i;
@@ -69,7 +70,7 @@ export function agentIntent(body,kind='text'){
   if(human.test(input))return 'human';
   if(personal.test(input)||/[\p{N}][\p{N} .+()-]{6,}|@/u.test(body))return 'sensitive';
   if(assurance.test(input)||malicious.test(input))return 'uncertain';
-  if(/^(?:السلام عليكم|السلام عليكم ورحمه الله|اهلا|اهلا وسهلا|سلام|مرحبا|صباح الخير|مساء الخير|ازيك|هاي|hello|hi|hey)[ !؟?.]*$/.test(input))return 'greet';
+  if(/^(?:السلام عليكم(?: ورحمه الله(?: وبركاته)?)?|اهلا|اهلا وسهلا|سلام|مرحبا|صباح الخير|مساء الخير|ازيك|هاي|hello|hi|hey)[ !؟?.]*$/.test(input))return 'greet';
   return 'lookup';
 }
 
@@ -154,10 +155,13 @@ export function agentDecision(body,kind,entries,prior={},choice){
     /(?:^| )(?:معايا|شهادتي|حاصل علي|درست|حابب ادرس|عايز ادرس|نفسي ادرس)(?: |$)/.test(fold(part))).map(agentFacts)):extracted;
   const facts={...prior,...declared};
   const next=['certificate','subject','university'].find(key=>!facts[key]);
-  if(intent==='greet')return {reason:'greet',state:'handled',reply:agentReplies.greet,facts,next};
+  if(intent==='greet'){
+    const reply=fold(body).startsWith('السلام عليكم')?'وعليكم السلام، '+agentReplies.greet:agentReplies.greet;
+    return {reason:'greet',state:'handled',reply,facts,next};
+  }
   if(requestsAgentRegistration(body))return {reason:'registration_link',state:'handled',reply:'أقدر أساعدك تكمّل طلب التقديم.',facts,next};
   if(/^(?:شكرا|متشكر|تمام|تسلم|يعطيك العافيه|thanks|thank you|ok)$/.test(fold(body))){
-    return {reason:'acknowledgement',state:'handled',reply:'تحت أمرك. لو عندك أي سؤال تاني قول لي.',facts,next};
+    return {reason:'acknowledgement',state:'handled',reply:'العفو! لو في أي حاجة تانية تحب تعرفها، أنا معاك.',facts,next};
   }
   const candidates=agentCandidates(body,entries);
   const localMatches=[];
@@ -185,7 +189,7 @@ export function agentDecision(body,kind,entries,prior={},choice){
   }
   if((choice==='qualify'||choice===undefined||!candidates.length)&&!question&&
      (agentCanQualify(body,entries)||Object.keys(extracted).length)){
-    const reply=next?agentReplies[next]:'تمام، وصلتني تفاصيل دراستك. تحب تعرف خطوات التقديم أو الأوراق المطلوبة؟';
+    const reply=next?agentReplies[next]:'تمام، كده الصورة أوضح. تحب نبدأ بخطوات التقديم ولا بالأوراق المطلوبة؟';
     return {reason:'qualify',state:'handled',reply,facts,next};
   }
   return {reason:'uncertain',state:'handoff',reply:agentReplies.uncertain,facts};

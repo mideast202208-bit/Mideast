@@ -1,6 +1,6 @@
 const states={active:'يديرها الوكيل',handoff:'محولة إلى الفريق',paused:'استلمها موظف',stopped:'المتابعة متوقفة'};
 const reasons={acknowledgement:'تأكيد أو شكر',finance:'أتعاب المكتب أو الدفع',official_fee:'رسوم رسمية معتمدة',registration_link:'رابط تسجيل',documents:'مستندات واردة',human:'طلب موظف أو شكوى',uncertain:'يحتاج تحققًا',sensitive:'بيانات خاصة أو مرفق',provider:'تعذر تجهيز الرد',window:'انتهت نافذة واتساب',staff:'استلام بشري',stop:'طلب إيقاف المتابعة',greet:'ترحيب',qualify:'تحديد الاحتياج',approved_source:'مصدر معتمد',AGENT_SETTINGS_CHANGED:'تغيّر الإعداد',AGENT_HUMAN_TAKEOVER:'استلام بشري',AGENT_DOCUMENT_HANDOFF:'استلام مستندات',AGENT_OPT_OUT:'إيقاف بطلب العميل',AGENT_INACTIVE:'الوكيل غير نشط'};
-const replyLabels={greet:'الترحيب',certificate:'السؤال عن الشهادة',subject:'السؤال عن التخصص',university:'السؤال عن الجامعة',uncertain:'معلومة تحتاج مراجعة',finance:'تحويل السؤال المالي',human:'التحويل لموظف'};
+const replyLabels={greet:'الرد على التحية',welcome:'افتتاح أول إجابة',certificate:'السؤال عن الشهادة',subject:'السؤال عن التخصص',university:'السؤال عن الجامعة',uncertain:'معلومة تحتاج مراجعة',finance:'تحويل السؤال المالي',human:'التحويل لموظف'};
 const feeLabels={application:'رسوم التقديم',ministry:'رسوم القيد للوزارة',university:'باقي رسوم القيد للجامعة',medical:'رسوم التأمين الطبي'};
 const deliveries={queued:'في الطابور',accepted:'قبلتها Meta',sent:'أُرسلت',delivered:'تم التسليم',read:'مقروءة',unknown:'النتيجة غير مؤكدة',failed:'فشل الإرسال',blocked:'توقف الإرسال'};
 const date=value=>value?new Date(value).toLocaleString('ar-EG'):'—';
@@ -39,7 +39,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
   }
 
   function preview(){
-    const form=modal('اختبار الوكيل', `<p class="sub">استخدم رسالة وتعليمات اصطناعية أو عامة. هذه الشاشة لا ترسل شيئًا على واتساب.</p>
+    const form=modal('اختبار الوكيل', `<p class="sub">جرّب أول رسالة من عميل جديد باستخدام مثال اصطناعي. هذه الشاشة لا ترسل شيئًا على واتساب.</p>
       <label>رسالة الاختبار<textarea name="body" rows="4" maxlength="1600" required></textarea></label>
       ${dashboard.provider_ready?'<label>تعليمات تجريبية غير محفوظة<textarea name="instructions" rows="3" maxlength="1500">'+e(dashboard.instructions)+'</textarea></label><label><input type="checkbox" name="provider"> استخدم المزوّد لاختيار المعلومات المرتبطة بالسؤال. أؤكد أن الرسالة اصطناعية والتعليمات عامة.</label>':''}
       <div data-agent-preview role="status"></div>`,'جرّب الرد');
