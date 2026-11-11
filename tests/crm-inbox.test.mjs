@@ -151,3 +151,49 @@ test('an owner can retry a failed inbound event at most three times without chan
     assert.equal(count(f,'contacts'),0);
   }finally{await f.close();}
 });
+
+test('historical CRM feed uses Cairo date boundaries before limits and preserves role visibility',async()=>{
+  const f=await inboundFixture();
+  try{
+    const admin=session(f,f.users.owner),staff=session(f,f.users.intake);
+    const q=f.db.prepare('INSERT INTO crm_waiting VALUES(?,?,?,?)');
+    const contact=f.db.prepare('INSERT INTO contacts VALUES(?,?,NULL,?,?,?,?,?,?)');
+    const lead=f.db.prepare("INSERT INTO leads VALUES(?,?,?,'new',0,?,'{}',?,?)");
+    const activity=f.db.prepare("INSERT INTO crm_activity(kind,event_id,contact_id,lead_id,source,created_at) VALUES('enquiry',?,?,?,'website',?)");
+    const add=(name,stamp,waiting,owner=f.users.owner.id)=>{
+      const contactId=randomUUID(),leadId=randomUUID();
+      contact.run(contactId,name,'','website',owner,'{}',stamp,stamp);
+      lead.run(leadId,contactId,name,owner,stamp,stamp);
+      if(waiting)q.run(leadId,contactId,'website',stamp);
+      activity.run(randomUUID(),contactId,leadId,stamp);
+      return {contactId,leadId};
+    };
+    const prior='2026-04-23T21:59:59.999Z',start='2026-04-23T22:00:00.000Z',
+      last='2026-04-24T20:59:59.999Z',next='2026-04-24T21:00:00.000Z';
+    const before=add('قبل اليوم',prior,true);
+    const waiting=add('داخل اليوم',start,true);
+    const assigned=add('مسند للموظف',last,false,f.users.intake.id);
+    const hidden=add('مسند لزميل',last,false,f.users.assigned.id);
+    for(let i=0;i<55;i++)activity.run(randomUUID(),before.contactId,before.leadId,next);
+    const event=f.db.prepare("INSERT INTO webhook_events(id,digest,payload,status,created_at) VALUES(?,?,?,'error',?)");
+    const included=randomUUID(),excluded=randomUUID();
+    event.run(included,hash(included),'{}',last);
+    event.run(excluded,hash(excluded),'{}',next);
+    const base='/api/crm-inbox';
+    assert.equal((await request(f,base+'?date=2026-02-30',admin)).status,400);
+    assert.equal((await request(f,base+'?date=2026-04-24')).status,401);
+    const filtered=await request(f,base+'?date=2026-04-24',admin);
+    assert.equal(filtered.status,200);
+    assert.equal(filtered.data.waiting_count,1);
+    assert.deepEqual(filtered.data.waiting.map(row=>row.lead_id),[waiting.leadId]);
+    assert.deepEqual(filtered.data.activity.map(row=>row.contact_id),[hidden.contactId,assigned.contactId,waiting.contactId]);
+    assert.deepEqual(filtered.data.failures.map(row=>row.id),[included]);
+    const agentFeed=(await request(f,base+'?date=2026-04-24',staff)).data;
+    assert.equal(agentFeed.waiting[0].contact_name,undefined);
+    assert.deepEqual(agentFeed.activity.map(row=>row.contact_id),[assigned.contactId,null]);
+    assert.deepEqual(agentFeed.failures,[]);
+    const recent=(await request(f,base,admin)).data;
+    assert.equal(recent.activity.length,50);
+    assert.ok(recent.activity.every(row=>row.created_at===next));
+  }finally{await f.close();}
+});

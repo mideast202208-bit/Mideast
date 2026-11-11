@@ -203,7 +203,7 @@ export function createApp(options = {}) {
         sendJson(res,200,{ok:true});return;
       }
       if(await handleCustomerAgent({db,user,path,method,req,res,jsonBody,sendJson,env,config,transport}))return;
-      if(await handleCrmInbox({db,user,path,method,req,res,jsonBody,sendJson}))return;
+      if(await handleCrmInbox({db,user,path,method,req,res,jsonBody,sendJson,date:url.searchParams.get('date')}))return;
       if(path==='/api/data' && method==='GET'){sendJson(res,200,getData(db,user));return;}
       if(path==='/api/operations/storage'&&method==='GET'){sendJson(res,200,backupDiagnostics(db,user,env));return;}
       // These render binary/HTML directly and bypass JSON projection. Staff may

@@ -19,7 +19,9 @@ const triggers = {'contact.created':'عند إضافة عميل','lead.created':
 const statusLabels = {queued:'في الطابور',accepted:'قبلتها Meta',sent:'أُرسلت',delivered:'تم التسليم',read:'مقروءة',received:'واردة',unknown:'نتيجة غير مؤكدة',failed:'تعذر الإرسال'};
 let user, csrf, data, page='dashboard', search='', selectedConversation=null, chatMessages=[], integration=null;
 let refreshTimer, refreshing=false, crmInbox=null, crmUnread=0, crmRevision='', refreshCrmPending=false;
-let navigationOpen=false, serviceTab='new', contactDate='today';
+let navigationOpen=false, serviceTab='new', serviceOrder='newest', datedInbox=null;
+const defaultRecordDates={contacts:'today',leads:'',tickets:''};
+const recordDates={...defaultRecordDates};
 let hubState=null,selectedSocial=null,socialMessages=[];
 let studioEntity='contact',factorState=null,dragField=null;
 const workspace=createWorkspace({api,escape,modal,bindForm,toast,render,getUser:()=>user,getData:()=>data,getPage:()=>page,getSearch:()=>search,navigate:async target=>{page=target;search='';await load();}});
@@ -30,24 +32,29 @@ const customerAgent=createCustomerAgent({api,escape,modal,bindForm,toast,render,
     const channel=customerWorkspaceState?.channels.find(item=>item.channel==='whatsapp'&&item.account_id===accountId&&item.available);
     if(channel)await recordMessenger.open(channel);
   }});
-const recordViews=createRecordViews({getUser:()=>user,getData:()=>data,getStages:()=>stages,formatMoney:money,formatDate:date,sourceName,personName:id=>personName(id)});
+const recordDate=value=>value?new Date(value).toLocaleDateString('ar-EG',{timeZone:'Africa/Cairo',day:'numeric',month:'short',year:'numeric'}):'—';
+const serviceTimestamp=value=>value?new Date(value).toLocaleString('ar-EG',{timeZone:'Africa/Cairo',dateStyle:'medium',timeStyle:'short'}):'—';
+const recordViews=createRecordViews({getUser:()=>user,getData:()=>data,getStages:()=>stages,formatMoney:money,formatDate:recordDate,sourceName,personName:id=>personName(id)});
 const studentRecords=createStudentRecords({getData:()=>data,getUser:()=>user,getPage:()=>page,api,render,modal,bindForm,toast,navigate:async target=>{page=target;search='';await load();}});
 const isManager = () => ['admin','manager'].includes(user?.role);
 const canFinance = () => ['admin','manager','accountant'].includes(user?.role);
 const getContact = id => data.contacts.find(c=>c.id===id);
 const personName = id => data.users.find(u=>u.id===id)?.name || 'موظف مختص';
 const filtered = list => filterRecordsBySearch(list,search);
-const selectedContactDate=()=>contactDate==='today'?cairoDay():contactDate;
-function visibleContacts(){
-  const day=selectedContactDate();
-  return filtered(day?data.contacts.filter(contact=>cairoDay(contact.created_at)===day):data.contacts);
+const selectedRecordDate=entity=>recordDates[entity]==='today'?cairoDay():recordDates[entity];
+function recordsOnDate(rows,entity){
+  const day=selectedRecordDate(entity);
+  return day?rows.filter(row=>cairoDay(row.created_at)===day):rows;
 }
-function contactDateFilter(){
-  const pressed=value=>contactDate===value?'true':'false';
-  return `<div class="panel contact-date-filter" role="group" aria-label="تاريخ إضافة العميل">
-    <button type="button" class="btn small ${contactDate==='today'?'primary':''}" aria-pressed="${pressed('today')}" data-action="contact-date" data-id="today">الجدد اليوم</button>
-    <label>تاريخ الإضافة<input type="date" data-contact-date value="${escape(selectedContactDate())}"></label>
-    <button type="button" class="btn small ${contactDate===''?'primary':''}" aria-pressed="${pressed('')}" data-action="contact-date">كل العملاء</button>
+const visibleContacts=()=>filtered(recordsOnDate(data.contacts,'contacts'));
+function recordDateFilter(entity){
+  const value=recordDates[entity],allLabel={contacts:'كل العملاء',leads:'كل الفرص',tickets:'كل التواريخ'}[entity];
+  const button=(choice,label)=>`<button type="button" class="btn small ${value===choice?'primary':''}" aria-pressed="${value===choice}" data-action="record-date" data-id="${choice}">${label}</button>`;
+  return `<div class="panel record-date-filter" role="group" aria-label="فلترة بتاريخ الإضافة">
+    ${button('today','الجدد اليوم')}
+    <label>تاريخ الإضافة<input type="date" data-record-date value="${escape(selectedRecordDate(entity))}"></label>
+    ${button('',allLabel)}
+    ${entity==='tickets'?'<label>الترتيب<select data-service-order>'+selectOptions({newest:'الأحدث أولًا',oldest:'الأقدم أولًا'},serviceOrder)+'</select></label>':''}
   </div>`;
 }
 function applyPageSearch(value,source){search=value;updateSectionSearch(document,search,view,source);}
@@ -94,10 +101,10 @@ function login(){
   setNavigation(false);
   recordMessenger.reset();
   customerAgent.reset();
-  clearInterval(refreshTimer);contactDate='today';factorState=null;crmInbox=null;crmUnread=0;crmRevision='';refreshCrmPending=false;$('#app').innerHTML=`<main class="login"><div class="loginart"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><h1>كل محادثة،<br>فرصة لبداية جديدة.</h1><p>مساحة واحدة لفريقك، من أول رسالة إلى إتمام الخدمة ومتابعة العميل.</p><div class="badge">الإصدار 0.10</div></div><div class="loginform"><form id="loginform"><h2>أهلًا برجوعك</h2><p class="sub">ادخل حسابك لفتح مساحة عمل ميد إيست.</p><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" required autocomplete="username"><label>كلمة المرور</label><input name="password" type="password" dir="ltr" required autocomplete="current-password"><label>رمز تطبيق المصادقة — لو مفعل</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"><div class="formerror" id="loginerror"></div><button class="btn primary" type="submit">دخول مساحة العمل ←</button><p class="footnote">حساب المدير يُنشأ عند تجهيز السيرفر. لو نسيت كلمة المرور تواصل مع مالك النظام.</p></form></div></main>`;
+  clearInterval(refreshTimer);Object.assign(recordDates,defaultRecordDates);datedInbox=null;serviceOrder='newest';factorState=null;crmInbox=null;crmUnread=0;crmRevision='';refreshCrmPending=false;$('#app').innerHTML=`<main class="login"><div class="loginart"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><h1>كل محادثة،<br>فرصة لبداية جديدة.</h1><p>مساحة واحدة لفريقك، من أول رسالة إلى إتمام الخدمة ومتابعة العميل.</p><div class="badge">الإصدار 0.10</div></div><div class="loginform"><form id="loginform"><h2>أهلًا برجوعك</h2><p class="sub">ادخل حسابك لفتح مساحة عمل ميد إيست.</p><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" required autocomplete="username"><label>كلمة المرور</label><input name="password" type="password" dir="ltr" required autocomplete="current-password"><label>رمز تطبيق المصادقة — لو مفعل</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"><div class="formerror" id="loginerror"></div><button class="btn primary" type="submit">دخول مساحة العمل ←</button><p class="footnote">حساب المدير يُنشأ عند تجهيز السيرفر. لو نسيت كلمة المرور تواصل مع مالك النظام.</p></form></div></main>`;
   $('#loginform').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;try{const result=await api('/login','POST',Object.fromEntries(new FormData(form)));user=result.user;csrf=result.csrf;page=user.role==='accountant'?'finance':'dashboard';await load();startRefresh();}catch(error){$('#loginerror').textContent=error.message;}finally{btn.disabled=false;}});
 }
-async function load(){data=await api('/data');if(user.role!=='accountant'&&(!crmInbox||page==='tickets')){try{await syncCrmInbox();}catch{}if(!user)return;}await studentRecords.load();await workspace.load(page);if(page==='marketing')await marketing.load();if(page==='customer-agent'&&user.role==='admin')await customerAgent.load();if(user.role!=='accountant'&&['dashboard','hub','registrations','social','templates','lab'].includes(page))hubState=await api('/hub');if(page==='integrations')integration=await api('/integrations');render();}
+async function load(){data=await api('/data');if(user.role!=='accountant'&&(!crmInbox||page==='tickets')){try{await syncCrmInbox();}catch{}if(!user)return;}if(page==='tickets')await loadDatedInbox();if(!user)return;await studentRecords.load();await workspace.load(page);if(page==='marketing')await marketing.load();if(page==='customer-agent'&&user.role==='admin')await customerAgent.load();if(user.role!=='accountant'&&['dashboard','hub','registrations','social','templates','lab'].includes(page))hubState=await api('/hub');if(page==='integrations')integration=await api('/integrations');render();}
 function inboxRevision(value){
   return JSON.stringify([value.activity.map(e=>e.seq),value.waiting.map(e=>e.lead_id),value.waiting_count,value.enabled,value.failures?.map(e=>e.id)]);
 }
@@ -117,8 +124,43 @@ async function syncCrmInbox({notify=false}={}){
   if(notify&&arriving?.length)toast(arriving.some(e=>e.kind==='agent_documents')?'وصلت مستندات تحتاج مراجعتك':arriving.some(e=>e.kind==='agent_finance')?'الوكيل حوّل لك سؤالًا عن أتعاب المكتب أو الدفع':'وصل نشاط جديد في الـCRM');
   if(crmInbox&&crmRevision!==revision)refreshCrmPending=true;
   crmInbox=next;crmRevision=revision;crmUnread=newItems.length;
-  if(page==='tickets'&&serviceTab==='new')markCrmSeen();
+  if(page==='tickets'&&serviceTab==='new'&&!selectedRecordDate('tickets'))markCrmSeen();
 }
+async function loadDatedInbox(){
+  const day=selectedRecordDate('tickets');
+  if(!day||!user)return;
+  const account=user.id;
+  const request={day,loading:true};
+  datedInbox=request;
+  try{
+    const inbox=await api('/crm-inbox?date='+encodeURIComponent(day));
+    if(datedInbox===request&&user?.id===account)datedInbox={day,inbox};
+  }catch{
+    if(datedInbox===request&&user?.id===account)datedInbox={day,error:true};
+  }
+}
+async function changeRecordDate(value,focus){
+  const entity=page;
+  if(!Object.hasOwn(recordDates,entity))return;
+  recordDates[entity]=value;
+  const pending=entity==='tickets'&&selectedRecordDate('tickets')?loadDatedInbox():null;
+  if(entity==='tickets'&&!pending){
+    datedInbox=null;
+    if(serviceTab==='new')markCrmSeen();
+  }
+  render();
+  $(focus)?.focus?.();
+  if(pending){
+    await pending;
+    if(!user||page!==entity||recordDates[entity]!==value||$('#modal')?.open)return;
+    const restoreFocus=document.activeElement?.matches(focus);
+    render();
+    if(restoreFocus)$(focus)?.focus?.();
+  }
+}
+const serviceSorted=rows=>[...rows].sort((a,b)=>serviceOrder==='oldest'
+  ?String(a.created_at).localeCompare(String(b.created_at))
+  :String(b.created_at).localeCompare(String(a.created_at)));
 function startRefresh(){
   clearInterval(refreshTimer);
   refreshTimer=setInterval(async()=>{
@@ -131,7 +173,9 @@ function startRefresh(){
       const editing=$('#modal')?.open||active?.matches('input,textarea,select,[contenteditable=true]');
       const notice=$('#crm-notice-count');
       if(notice)notice.textContent=crmUnread?String(crmUnread):'';
-      if(!editing&&(page==='inbox'||refreshCrmPending&&['dashboard','tickets','contacts','leads','registrations','tasks'].includes(page))){
+      const dayChanged=recordDates[page]==='today'&&$('[data-record-date]')?.value!==cairoDay();
+      const refreshPage=refreshCrmPending&&['dashboard','tickets','contacts','leads','registrations','tasks'].includes(page);
+      if(!editing&&(page==='inbox'||refreshPage||dayChanged)){
         const refreshRevision=crmRevision;
         if(page==='inbox'&&selectedConversation)chatMessages=await api('/conversations/'+selectedConversation+'/messages');
         await load();
@@ -140,17 +184,28 @@ function startRefresh(){
     }catch{}finally{refreshing=false;}
   },8000);
 }
-function crmInboxView(){
-  const inbox=crmInbox||{waiting:[],activity:[],metrics:[],waiting_count:0};
+function crmInboxView(inbox){
+  const day=selectedRecordDate('tickets');
+  if(day&&!inbox)return '<section class="panel" role="status">'+(datedInbox?.error?'تعذر تحميل سجلات التاريخ المختار. <button type="button" class="btn small" data-action="retry-record-date">إعادة المحاولة</button>':'جارٍ تحميل سجلات التاريخ المختار…')+'</section>';
+  inbox??={waiting:[],activity:[],failures:[],waiting_count:0};
+  const emptyForDate=(title,detail='')=>empty(day?'لا توجد سجلات في التاريخ المختار':title,day?'اختر تاريخًا آخر أو اعرض كل التواريخ.':detail);
+
   const assignButton=id=>'<button class="btn small" data-action="crm-assign" data-id="'+escape(id)+'">تعيين موظف</button>';
-  const rows=inbox.waiting.map(q=>'<article class="fieldcard"><div><b>'+escape(q.title||'فرصة واردة')+'</b><p class="sub">'+escape(q.contact_name||'')+' · '+escape(sourceName(q.source)||q.source)+' · '+escape(new Date(q.created_at).toLocaleString('ar-EG'))+'</p>'+(q.due_at&&Date.parse(q.due_at)<Date.now()?badge('متأخرة','red'):'')+'</div><div class="actions"><button class="btn primary small" data-action="crm-claim" data-id="'+escape(q.lead_id)+'">استلام وفتح الفرصة</button>'+(isManager()?assignButton(q.lead_id):'')+'</div></article>').join('');
-  const metrics=inbox.metrics.map(u=>'<div class="fieldcard"><b>'+escape(u.name)+'</b><span class="sub">'+u.open+' فرص نشطة · '+u.overdue+' مهام متأخرة · '+u.completed+' مهام مكتملة</span></div>').join('');
+  const rows=serviceSorted(inbox.waiting).map(q=>'<article class="fieldcard"><div><b>'+escape(q.title||'فرصة واردة')+'</b><p class="sub">'+escape(q.contact_name||'')+' · '+escape(sourceName(q.source)||q.source)+' · '+escape(serviceTimestamp(q.created_at))+'</p>'+(q.due_at&&Date.parse(q.due_at)<Date.now()?badge('متأخرة','red'):'')+'</div><div class="actions"><button class="btn primary small" data-action="crm-claim" data-id="'+escape(q.lead_id)+'">استلام وفتح الفرصة</button>'+(isManager()?assignButton(q.lead_id):'')+'</div></article>').join('');
+  const metrics=(crmInbox?.metrics||[]).map(u=>'<div class="fieldcard"><b>'+escape(u.name)+'</b><span class="sub">'+u.open+' فرص نشطة · '+u.overdue+' مهام متأخرة · '+u.completed+' مهام مكتملة</span></div>').join('');
   const kinds={agent_finance:'سؤال عن أتعاب المكتب أو الدفع',agent_documents:'مستندات واردة تحتاج مراجعتك',agent_handoff:'حالة تحتاج تدخلًا بشريًا',registration:'تسجيل جديد',enquiry:'استفسار جديد',whatsapp:'رسالة واتساب',facebook:'رسالة فيسبوك',instagram:'رسالة إنستجرام',assignment:'تغيير مسؤول المتابعة'};
-  const events=inbox.activity.map(e=>'<div class="fieldcard"><div><b>'+escape(kinds[e.kind]||e.kind)+'</b><small>'+escape(sourceName(e.source)||e.source)+' · '+escape(new Date(e.created_at).toLocaleString('ar-EG'))+'</small></div>'+(['agent_documents','agent_finance'].includes(e.kind)&&e.lead_id?'<button type="button" class="btn small" data-action="crm-activity-open" data-id="'+escape(e.lead_id)+'">فتح الفرصة</button>':'')+'</div>').join('');
-  return '<section class="panel"><div class="panelhead"><h2>بانتظار الاستلام · '+inbox.waiting_count+'</h2>'+(user.role==='admin'?'<button class="btn small" data-action="crm-toggle">'+(inbox.enabled?'إيقاف إدخال فرص جديدة للصندوق':'تفعيل استقبال الفرص في الصندوق')+'</button>':'')+'</div>'+(rows||empty('لا توجد فرص بانتظار الاستلام','أي استفسار جديد من قناة مربوطة يظهر هنا تلقائيًا.'))+'</section>'+
-    (isManager()?'<section class="panel"><h2>متابعة الفريق</h2>'+metrics+'</section>':'')+
-    (isManager()?'<section class="panel"><h2>أحداث واردة تعذر معالجتها</h2>'+((inbox.failures||[]).map(e=>'<div class="fieldcard"><div><b>'+escape(sourceName(e.source))+'</b><small>'+escape(new Date(e.created_at).toLocaleString('ar-EG'))+' · '+escape(e.code||'PROCESSING_FAILED')+'</small></div>'+(user.role==='admin'?'<button class="btn small" data-action="crm-retry" data-id="'+escape(e.source+'/'+e.id)+'">إعادة المحاولة</button>':'')+'</div>').join('')||empty('لا توجد أحداث فاشلة'))+'</section>':'')+
-    '<section class="panel"><h2>آخر التنبيهات الداخلية</h2>'+(events||empty('لا توجد تنبيهات'))+'</section>';
+  const events=serviceSorted(inbox.activity).map(e=>{
+    const contact=day&&e.contact_id?getContact(e.contact_id):null;
+    const leadLink=e.lead_id&&(day||['agent_documents','agent_finance'].includes(e.kind));
+    return '<div class="fieldcard"><div><b>'+escape(kinds[e.kind]||e.kind)+'</b>'+(contact?'<p class="sub">'+escape(contact.name)+'</p>':'')+
+      '<small>'+escape(sourceName(e.source)||e.source)+' · '+escape(serviceTimestamp(e.created_at))+'</small></div>'+
+      (leadLink?'<button type="button" class="btn small" data-action="crm-activity-open" data-id="'+escape(e.lead_id)+'">فتح الفرصة</button>':
+      contact?'<button type="button" class="btn small" data-action="edit-contact" data-id="'+escape(contact.id)+'">فتح العميل</button>':'')+'</div>';
+  }).join('');
+  return '<section class="panel"><div class="panelhead"><h2>بانتظار الاستلام · '+inbox.waiting_count+'</h2>'+(user.role==='admin'?'<button class="btn small" data-action="crm-toggle">'+(crmInbox?.enabled?'إيقاف إدخال فرص جديدة للصندوق':'تفعيل استقبال الفرص في الصندوق')+'</button>':'')+'</div>'+(rows||emptyForDate('لا توجد فرص بانتظار الاستلام','أي استفسار جديد من قناة مربوطة يظهر هنا تلقائيًا.'))+'</section>'+
+    (isManager()?'<section class="panel"><h2>متابعة الفريق الآن</h2>'+metrics+'</section>':'')+
+    (isManager()?'<section class="panel"><h2>أحداث واردة تعذر معالجتها</h2>'+(serviceSorted(inbox.failures||[]).map(e=>'<div class="fieldcard"><div><b>'+escape(sourceName(e.source))+'</b><small>'+escape(serviceTimestamp(e.created_at))+' · '+escape(e.code||'PROCESSING_FAILED')+'</small></div>'+(user.role==='admin'?'<button class="btn small" data-action="crm-retry" data-id="'+escape(e.source+'/'+e.id)+'">إعادة المحاولة</button>':'')+'</div>').join('')||emptyForDate('لا توجد أحداث فاشلة'))+'</section>':'')+
+    '<section class="panel"><h2>'+(day?'تنبيهات التاريخ المختار':'آخر التنبيهات الداخلية')+'</h2>'+(events||emptyForDate('لا توجد تنبيهات'))+'</section>';
 }
 
 const navigation=[['dashboard','◈','نظرة عامة'],['assistant','◇','مساعد الإدارة'],['customer-agent','◇','وكيل خدمة العملاء الذكي'],['communications','◉','مركز التواصل'],['marketing','◉','التسويق الاجتماعي'],['hub','⊞','مركز القنوات'],['registrations','↗','التسجيلات والملفات'],['social','◉','محادثات السوشيال'],['templates','▧','الردود والقوالب'],['lab','⚡','المختبر الافتراضي'],['contacts','♧','العملاء'],['leads','▦','فرص البيع'],['inbox','◉','صندوق المحادثات'],['tickets','▤','خدمة العملاء'],['tasks','☑','المهام والمتابعة'],['quotes','▧','عروض الأسعار'],['finance','↗','الفواتير والتحصيل'],['studio','◇','الاستوديو'],['automations','⚡','الأتمتة'],['users','◎','الفريق والصلاحيات'],['integrations','⊞','الربط والإعدادات'],['audit','≡','سجل العمليات'],['security','◇','أمان الحساب'],['operations','⊙','جاهزية التشغيل']];
@@ -191,8 +246,8 @@ function view(){
     const openTasks=data.tasks.filter(t=>t.status==='open'),active=data.leads.filter(l=>!['won','lost'].includes(l.stage)),openTickets=data.tickets.filter(t=>t.status!=='resolved');
     return heading(`صباح العمل، ${escape(user.name.split(' ')[0])} ☀`,'صورة واضحة للعملاء والمتابعة، من مكان واحد.')+`<div class="metrics">${[['♧',data.contacts.length,'إجمالي العملاء','جهات اتصال مسجلة'],['▦',active.length,'فرص قيد المتابعة','عبر مراحل البيع'],['◉',data.conversations.length,'محادثات واتساب','المحادثات المسجلة'],['☑',openTasks.length,'مهام مفتوحة','متابعة تحتاج تنفيذ']].map(([icon,count,label,note])=>`<article class="metric"><div class="metric-icon">${icon}</div><span>${escape(label)}</span><strong>${count.toLocaleString('ar-EG')}</strong><small>${note}</small></article>`).join('')}</div><div class="grid2"><div class="panel"><div class="panelhead"><h2>مسار فرص البيع</h2><button class="linkbutton" data-page="leads">عرض المسار ←</button></div>${Object.entries(stages).map(([key,label])=>{const count=data.leads.filter(l=>l.stage===key).length;return `<div class="progressrow"><span>${escape(label)}</span><div class="bar"><div style="width:${data.leads.length?count/data.leads.length*100:0}%"></div></div><b>${count.toLocaleString('ar-EG')}</b></div>`;}).join('')}</div><div class="panel"><div class="panelhead"><h2>المتابعة القادمة</h2><button class="linkbutton" data-page="tasks">كل المهام ←</button></div>${openTasks.length?openTasks.slice(0,4).map(taskRow).join(''):empty('كل شيء جاهز للبدء','أضف عميلًا، ثم حدد أول متابعة','☑')}<div class="setup-card"><b>${openTickets.length.toLocaleString('ar-EG')} تذاكر تحتاج متابعة</b><p>تابع طلبات العملاء، وأغلق التذكرة بعد حل المشكلة.</p></div></div></div>${!data.contacts.length?`<div class="panel"><h2>ابدأ مساحة عملك</h2><p class="sub">البيانات تبدأ فارغة. أضف فريقك وحقول عملك، ثم سجّل أول عميل.</p><div class="actions" style="margin-top:18px"><button class="btn primary" data-action="contact">＋ أول عميل</button>${isManager()?'<button class="btn" data-page="studio">افتح الاستوديو</button><button class="btn" data-page="integrations">إعداد واتساب</button>':''}</div></div>`:''}`;
   }
-  if(page==='contacts')return heading('العملاء','اعرض العملاء حسب تاريخ إضافتهم بتوقيت القاهرة.','إضافة عميل','contact')+contactDateFilter()+sectionSearch('العملاء',isManager()?'اسم العميل أو رقم الهاتف أو البريد':'اسم العميل أو بياناته المتاحة',search,recordViews.view('contacts',visibleContacts()));
-  if(page==='leads')return heading('فرص البيع','مربعات، لوحة مراحل، قائمة أو جدول — اختر الطريقة الأنسب لمتابعتك.','فرصة جديدة','lead')+sectionSearch('الفرص','عنوان الفرصة أو اسم العميل',search,recordViews.view('leads',filterRecordsBySearch(data.leads,search,r=>[getContact(r.contact_id)?.name||''])));
+  if(page==='contacts')return heading('العملاء','اعرض العملاء حسب تاريخ إضافتهم بتوقيت القاهرة.','إضافة عميل','contact')+recordDateFilter('contacts')+sectionSearch('العملاء',isManager()?'اسم العميل أو رقم الهاتف أو البريد':'اسم العميل أو بياناته المتاحة',search,recordViews.view('contacts',visibleContacts()));
+  if(page==='leads')return heading('فرص البيع','اعرض الفرص حسب تاريخ إنشائها بتوقيت القاهرة.','فرصة جديدة','lead')+recordDateFilter('leads')+sectionSearch('الفرص','عنوان الفرصة أو اسم العميل',search,recordViews.view('leads',filterRecordsBySearch(recordsOnDate(data.leads,'leads'),search,r=>[getContact(r.contact_id)?.name||''])));
   if(page==='tasks')return heading('المهام والمتابعة','خطوة واضحة لكل موعد، حتى لا تفوت متابعة أي عميل.','مهمة جديدة','task')+`<div class="panel">${data.tasks.length?filtered(data.tasks).map(taskRow).join(''):empty('لا توجد مهام','أضف مهمة أو أنشئ قاعدة متابعة من الأتمتة','☑')}</div>`;
   if(page==='tickets')return customerServiceView();
   if(page==='inbox'){
@@ -204,15 +259,18 @@ function view(){
   if(page==='audit')return heading('سجل العمليات','تعرف مين نفذ الإجراء ووقته، دون إظهار كلمات المرور أو أسرار الربط.')+`<div class="panel" id="auditpanel">${empty('تحميل سجل العمليات…','')}</div>`;
   return '';
 }
-function customerServiceTickets(){return `<div class="panel">${data.tickets.length?`<div class="tablewrap"><table><thead><tr><th>التذكرة</th><th>العميل</th><th>الأولوية</th><th>المسؤول</th><th>الحالة</th></tr></thead><tbody>${filtered(data.tickets).map(t=>`<tr><td><b>${escape(t.title)}</b><div class="sub">${escape(t.description)}</div></td><td>${escape(getContact(t.contact_id)?.name)}</td><td>${badge({low:'منخفضة',normal:'عادية',high:'عاجلة'}[t.priority],t.priority==='high'?'red':'')}</td><td>${escape(personName(t.owner_id))}</td><td><select data-ticket="${t.id}">${selectOptions({open:'مفتوحة',pending:'قيد المتابعة',resolved:'تم الحل'},t.status)}</select></td></tr>`).join('')}</tbody></table></div>`:empty('لا توجد تذاكر مفتوحة','سجّل طلب العميل وحدد أولويته والمسؤول عنه','▤')}</div>`;}
+function customerServiceTickets(tickets){return `<div class="panel">${tickets.length?`<div class="tablewrap"><table><thead><tr><th>التذكرة</th><th>العميل</th><th>الأولوية</th><th>المسؤول</th><th>تاريخ الفتح</th><th>الحالة</th></tr></thead><tbody>${tickets.map(t=>`<tr><td><b>${escape(t.title)}</b><div class="sub">${escape(t.description)}</div></td><td>${escape(getContact(t.contact_id)?.name)}</td><td>${badge({low:'منخفضة',normal:'عادية',high:'عاجلة'}[t.priority],t.priority==='high'?'red':'')}</td><td>${escape(personName(t.owner_id))}</td><td>${escape(recordDate(t.created_at))}</td><td><select data-ticket="${t.id}">${selectOptions({open:'مفتوحة',pending:'قيد المتابعة',resolved:'تم الحل'},t.status)}</select></td></tr>`).join('')}</tbody></table></div>`:empty('لا توجد تذاكر مطابقة',selectedRecordDate('tickets')?'اختر تاريخًا آخر أو اعرض كل التواريخ.':'سجّل طلب العميل وحدد أولويته والمسؤول عنه','▤')}</div>`;}
 function customerServiceView(){
- const mine=data.leads.filter(lead=>lead.owner_id===user.id&&!['won','lost'].includes(lead.stage));
- const tabs={new:'فرص جديدة ('+(crmInbox?.waiting_count??0)+')',mine:'فرصي ('+mine.length+')',tickets:'التذاكر'};
+ const day=selectedRecordDate('tickets');
+ const inbox=day?(datedInbox?.day===day?datedInbox.inbox:null):crmInbox;
+ const mine=serviceSorted(recordsOnDate(data.leads,'tickets').filter(lead=>lead.owner_id===user.id&&!['won','lost'].includes(lead.stage)));
+ const tickets=serviceSorted(filtered(recordsOnDate(data.tickets,'tickets')));
+ const tabs={new:'فرص جديدة ('+(inbox?.waiting_count??(day?'…':0))+')',mine:'فرصي ('+mine.length+')',tickets:'التذاكر ('+tickets.length+')'};
  const menu='<div class="service-tabs" role="group" aria-label="أقسام خدمة العملاء">'+Object.entries(tabs).map(([key,label])=>'<button type="button" class="btn '+(serviceTab===key?'primary':'')+'" aria-pressed="'+(serviceTab===key)+'" data-action="service-tab" data-id="'+key+'">'+escape(label)+'</button>').join('')+'</div>';
- let content=crmInboxView();
- if(serviceTab==='mine')content='<section class="panel"><h2>فرصي قيد المتابعة</h2>'+(mine.map(l=>'<article class="fieldcard"><div><b>'+escape(getContact(l.contact_id)?.name||l.title)+'</b><p class="sub">'+escape(l.title)+' · '+escape(stages[l.stage]||l.stage)+'</p></div><button class="btn primary small" data-action="edit-lead" data-id="'+escape(l.id)+'">فتح الفرصة والرد</button></article>').join('')||empty('لا توجد فرص مسندة إليك','استلم فرصة من تبويب الفرص الجديدة للبدء.'))+'</section>';
- if(serviceTab==='tickets')content=customerServiceTickets();
- return heading('خدمة العملاء','استلم الفرصة، راجع سجلها ورد على العميل من نفس المكان.',serviceTab==='tickets'?'فتح تذكرة':'','ticket')+menu+content;
+ let content=crmInboxView(inbox);
+ if(serviceTab==='mine')content='<section class="panel"><h2>فرصي قيد المتابعة</h2>'+(mine.map(l=>'<article class="fieldcard"><div><b>'+escape(getContact(l.contact_id)?.name||l.title)+'</b><p class="sub">'+escape(l.title)+' · '+escape(stages[l.stage]||l.stage)+' · '+escape(recordDate(l.created_at))+'</p></div><button class="btn primary small" data-action="edit-lead" data-id="'+escape(l.id)+'">فتح الفرصة والرد</button></article>').join('')||empty(day?'لا توجد فرص متابعة في التاريخ المختار':'لا توجد فرص مسندة إليك',day?'اختر تاريخًا آخر أو اعرض كل التواريخ.':'استلم فرصة من تبويب الفرص الجديدة للبدء.'))+'</section>';
+ if(serviceTab==='tickets')content=customerServiceTickets(tickets);
+ return heading('خدمة العملاء','استلم الفرصة، راجع سجلها ورد على العميل من نفس المكان.',serviceTab==='tickets'?'فتح تذكرة':'','ticket')+recordDateFilter('tickets')+menu+content;
 }
 function taskRow(t){return `<div class="taskrow ${t.status==='done'?'done':''}"><button class="check" data-task="${t.id}" aria-label="تغيير حالة المهمة">${t.status==='done'?'✓':''}</button><div class="detail"><b>${escape(t.title)}</b><small>${escape(getContact(t.contact_id)?.name || 'مهمة فريق')} · ${escape(personName(t.owner_id))}</small></div>${badge(date(t.due_at),t.status==='open'&&t.due_at&&Date.parse(t.due_at)<Date.now()?'red':'')}</div>`;}
 async function showContact(id){
@@ -282,9 +340,9 @@ function arrangeRecord(form){
  if(fields)details.append(fields);if(files)details.append(files);if(chat)side.append(chat);if(followup)side.append(followup);layout.append(details,side);form.prepend(layout);
 }
 async function action(name,id){
-  if(name==='crm-notifications'){page='tickets';serviceTab='new';search='';await load();return;}
+  if(name==='crm-notifications'){page='tickets';serviceTab='new';recordDates.tickets='';datedInbox=null;search='';await load();return;}
   if(name==='crm-activity-open'){await showLead(id);return;}
-  if(name==='service-tab'){serviceTab=id;if(id==='new')markCrmSeen();render();return;}
+  if(name==='service-tab'){serviceTab=id;if(id==='new'&&!selectedRecordDate('tickets'))markCrmSeen();render();return;}
   if(name==='crm-retry'){await api('/crm-inbox/retry/'+id,'POST',{});await load();toast('تمت إضافة الحدث إلى طابور المعالجة');return;}
   if(name==='crm-claim'){
     try{const claimed=await api('/crm-inbox/'+encodeURIComponent(id)+'/claim','POST',{});page='tickets';serviceTab='mine';search='';await load();toast('الفرصة بقت ضمن فرصك');await showLead(claimed.lead_id);}
@@ -299,7 +357,7 @@ async function action(name,id){
   }
   if(name==='export-customers'){
     if(user.role!=='admin')throw new Error('تصدير بيانات العملاء للمالك');
-    const query=search,createdOn=selectedContactDate(),visible=visibleContacts().length,hasFilters=Boolean(query.trim()||createdOn);
+    const query=search,createdOn=selectedRecordDate('contacts'),visible=visibleContacts().length,hasFilters=Boolean(query.trim()||createdOn);
     const form=modal('تصدير العملاء إلى Excel',`<label>نطاق التصدير<select name="scope"><option value="all" ${hasFilters?'':'selected'}>كل العملاء (${data.contacts.length})</option><option value="filtered" ${hasFilters?'selected':''}>النتائج المعروضة (${visible})</option></select></label><p class="sub">يشمل حالة أحدث فرصة لكل عميل، وجميع حالات الفرص وملفات الطلاب المرتبطة، والخدمات المطلوبة وبيانات التواصل والمسؤول.</p><p class="sub">الملف بصيغة XLSX، مع فلترة الأعمدة وتثبيت العناوين.</p>`,'تنزيل Excel');
     form.addEventListener('submit',async event=>{
       event.preventDefault();const button=form.querySelector('[type=submit]');button.disabled=true;
@@ -312,7 +370,8 @@ async function action(name,id){
       }catch(error){$('#modalerror').textContent=error.message;}finally{button.disabled=false;}
     });return;
   }
-  if(name==='contact-date'){contactDate=id||'';render();$('[data-action=contact-date][aria-pressed=true]')?.focus();return;}
+  if(name==='record-date'){await changeRecordDate(id||'','[data-action=record-date][aria-pressed=true]');return;}
+  if(name==='retry-record-date'){await changeRecordDate(recordDates.tickets,'[data-record-date]');return;}
   if(name==='clear-page-search'){applyPageSearch('',null);$('[data-page-search]')?.focus();return;}
   if(await studentRecords.action(name,id))return;
   if(await marketing.action(name,id))return;
@@ -396,7 +455,7 @@ if(typeof window!=='undefined')window.addEventListener('resize',()=>{if(!mobileN
 document.addEventListener('input',event=>{if(event.target.matches?.('[data-page-search]')&&!event.isComposing)applyPageSearch(event.target.value,event.target);});
 document.addEventListener('compositionend',event=>{if(event.target.matches?.('[data-page-search],#search'))applyPageSearch(event.target.value,event.target);});
 document.addEventListener('change',async event=>{
-  try{if(event.target.matches?.('[data-contact-date]')){contactDate=event.target.value;render();$('[data-contact-date]')?.focus();return;}if(event.target.dataset.studentFilter){studentRecords.change(event.target.dataset.studentFilter,event.target.value);return;}if(event.target.dataset.recordOrder){recordViews.order(event.target.dataset.recordOrder,event.target.value);render();return;}if(event.target.dataset.stage){await api('/leads/'+event.target.dataset.stage,'PATCH',{stage:event.target.value});await load();toast('تم تحديث المرحلة');}
+  try{if(event.target.matches?.('[data-record-date]')){await changeRecordDate(event.target.value,'[data-record-date]');return;}if(event.target.matches?.('[data-service-order]')){serviceOrder=event.target.value;render();$('[data-service-order]')?.focus();return;}if(event.target.dataset.studentFilter){studentRecords.change(event.target.dataset.studentFilter,event.target.value);return;}if(event.target.dataset.recordOrder){recordViews.order(event.target.dataset.recordOrder,event.target.value);render();return;}if(event.target.dataset.stage){await api('/leads/'+event.target.dataset.stage,'PATCH',{stage:event.target.value});await load();toast('تم تحديث المرحلة');}
     if(event.target.dataset.ticket){await api('/tickets/'+event.target.dataset.ticket,'PATCH',{status:event.target.value});await load();toast('تم تحديث التذكرة');}}
   catch(error){toast(error.message,true);await load();}
 });
