@@ -17,6 +17,6 @@
 @media(prefers-reduced-motion:reduce){.record-card{transition:none}}
 .section-search{background:#fff;border:1px solid #dce5e5;border-radius:16px;padding:17px 20px;margin-bottom:20px}.section-search>label{display:block;margin:0 0 10px;font-weight:700;color:#234751}.section-search-controls{display:flex;align-items:center;gap:12px}.section-search-controls input{flex:1;min-width:0;margin:0;min-height:46px}.section-search-controls .btn{flex-shrink:0;min-height:46px}.section-search-controls input:focus-visible{outline:2px solid #238579;outline-offset:2px}@media(max-width:600px){.section-search{padding:15px}.section-search-controls{flex-wrap:wrap}.section-search-controls input{flex-basis:100%}.section-search-controls .btn{width:100%}}
 
-.contact-date-filter{display:flex;flex-wrap:wrap;align-items:end;gap:.65rem}
-.contact-date-filter label{display:grid;gap:.3rem;margin:0}
-.contact-date-filter input{width:auto;min-inline-size:9rem}
+.record-date-filter{display:flex;flex-wrap:wrap;align-items:end;gap:.65rem}
+.record-date-filter label{display:grid;gap:.3rem;margin:0}
+.record-date-filter :is(input,select){width:auto;min-inline-size:9rem}
