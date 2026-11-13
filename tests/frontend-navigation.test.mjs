@@ -14,7 +14,7 @@ async function application(role='admin',width=1200,seed){
  Object.defineProperty(dom.window,'innerWidth',{value:width,writable:true,configurable:true});dom.window.matchMedia=()=>({matches:dom.window.innerWidth<=800});
  const saved={window:global.window,document:global.document,FormData:global.FormData,fetch:global.fetch,setInterval:global.setInterval,clearInterval:global.clearInterval};
  global.window=dom.window;global.document=dom.window.document;global.FormData=dom.window.FormData;global.setInterval=()=>0;global.clearInterval=()=>{};
- global.fetch=async path=>({ok:true,status:200,json:async()=>String(path).endsWith('/setup/status')?{required:false}:String(path).endsWith('/me')?{user,csrf:'synthetic-only'}:String(path).endsWith('/data')?data:String(path).endsWith('/hub')?hub:String(path).startsWith('/api/crm-inbox')?getInbox?.(new URL(path,'https://navigation.example.test').searchParams.get('date'))||{}:{}});
+ global.fetch=async path=>({ok:true,status:200,json:async()=>String(path).startsWith('/api/finance/expenses')?{month:'2026-11',totals:[],expenses:[]}:String(path).endsWith('/setup/status')?{required:false}:String(path).endsWith('/me')?{user,csrf:'synthetic-only'}:String(path).endsWith('/data')?data:String(path).endsWith('/hub')?hub:String(path).startsWith('/api/crm-inbox')?getInbox?.(new URL(path,'https://navigation.example.test').searchParams.get('date'))||{}:{}});
  await import('../public/app.js?navigation='+role+'-'+(++serial));
  const wait=async predicate=>{for(let i=0;i<120;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}assert.fail('Navigation did not reach expected state');};
  await wait(()=>dom.window.document.querySelector('.primary-navigation'));

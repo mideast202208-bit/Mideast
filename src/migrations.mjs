@@ -227,3 +227,21 @@ export function migrateV12(db){
     db.exec('COMMIT');
   }catch(error){db.exec('ROLLBACK');throw error;}
 }
+
+export function migrateV13(db){
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS office_expenses (
+        id TEXT PRIMARY KEY, expense_date TEXT NOT NULL, category TEXT NOT NULL,
+        description TEXT NOT NULL, amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+        currency TEXT NOT NULL CHECK(currency IN('EGP','USD','SAR')),
+        created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL,
+        voided_at TEXT, voided_by TEXT REFERENCES users(id), void_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS office_expenses_date ON office_expenses(expense_date);
+      INSERT OR IGNORE INTO schema_versions VALUES(13);
+    `);
+    db.exec('COMMIT');
+  } catch(error){db.exec('ROLLBACK');throw error;}
+}

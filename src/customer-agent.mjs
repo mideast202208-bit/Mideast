@@ -4,6 +4,7 @@ import {audit,fail,getContact,manager,now,text,uid} from './service.mjs';
 import {normalizeSearch} from './international.mjs';
 import {agentAllowsReply,agentCandidates,agentCanQualify,agentDecision,agentIntent,agentModel,agentReplies,agentReplyKeys,approvedWebsiteUrl,chooseAgentSource,knowledgeReply,officialFeeAnswer,officialFeeTopic,registrationIntro,requestsAgentRegistration,safeAgentAnswer} from './customer-agent-policy.mjs';
 import {registrationLink,resolveRegistrationLink,whatsappRegistrationOpportunity} from './intake-links.mjs';
+import {companyKnowledge,companyKnowledgeReviewed} from './customer-agent-company.mjs';
 import {previewWebsiteKnowledge} from './customer-agent-website.mjs';
 import {requestWhatsAppFiles} from './request-documents.mjs';
 
@@ -14,7 +15,7 @@ const handoffReasons = {
   staff:'استلام بشري', stop:'طلب إيقاف المتابعة'
 };
 const nextLabels = {certificate:'اسأل عن نوع الشهادة',subject:'اسأل عن التخصص',university:'اسأل عن الجامعة'};
-const defaultSettings = {enabled:false,instructions:'',replies:{},forbidden:[],fees:{},manager_id:null,pilot_contact_id:null,pilot_phone_hash:null,pilot_name:'',pilot_suffix:'',phone_id:null,revision:0};
+const defaultSettings = {enabled:false,mode:'provider',company_knowledge:true,instructions:'',replies:{},forbidden:[],fees:{},manager_id:null,pilot_contact_id:null,pilot_phone_hash:null,pilot_name:'',pilot_suffix:'',phone_id:null,revision:0};
 
 function settings(db){
   const row=db.prepare('SELECT value FROM settings WHERE key=?').get(settingsKey);
@@ -41,6 +42,10 @@ function providerReady(env){
   return env.RECOVERY_MODE!=='1'&&env.CUSTOMER_AGENT_OPENAI_APPROVED==='1'&&Boolean(env.CUSTOMER_AGENT_OPENAI_KEY?.trim());
 }
 
+function engineReady(env,cfg){
+  return env.RECOVERY_MODE!=='1'&&(cfg.mode==='local'||providerReady(env));
+}
+
 function pilotIdentity(db,cfg,contact,phoneId){
   if(!contact||cfg.pilot_contact_id!==contact.id||
       cfg.phone_id!==phoneId||hash(contact.phone??'')!==cfg.pilot_phone_hash)return false;
@@ -49,7 +54,7 @@ function pilotIdentity(db,cfg,contact,phoneId){
 }
 
 function pilotEligible(db,env,cfg,contact,phoneId){
-  return cfg.enabled&&providerReady(env)&&pilotIdentity(db,cfg,contact,phoneId);
+  return cfg.enabled&&engineReady(env,cfg)&&pilotIdentity(db,cfg,contact,phoneId);
 }
 
 export function trackedCustomerAgentLead(db,contact,phoneId){
@@ -61,9 +66,11 @@ export function trackedCustomerAgentLead(db,contact,phoneId){
 }
 
 function activeSources(db,cfg){
-  return db.prepare("SELECT id,title,question,answer,url,reviewed_until FROM customer_agent_sources WHERE status='approved' AND reviewed_until>? ORDER BY updated_at DESC").all(now())
+  const reviewed=db.prepare("SELECT id,title,question,answer,url,reviewed_until FROM customer_agent_sources WHERE status='approved' AND reviewed_until>? ORDER BY updated_at DESC").all(now())
     .filter(source=>agentAllowsReply(source.answer,cfg.forbidden))
     .map(source=>({...source,official_fee:Object.hasOwn(cfg.fees,source.id)?cfg.fees[source.id]:null}));
+  if(cfg.mode==='local'&&cfg.company_knowledge)return [...reviewed,...companyKnowledge.filter(source=>agentAllowsReply(source.answer,cfg.forbidden))];
+  return reviewed;
 }
 
 function thread(db,conversationId,phoneId){
@@ -291,7 +298,7 @@ function feeDecision(body,sources,prior){
 }
 
 export async function processCustomerAgent(db,env,transport,key,origin){
-  if(!providerReady(env))return;
+  if(env.RECOVERY_MODE==='1')return;
   const job=db.prepare(`SELECT j.*,m.body,m.kind,m.created_at received_at,c.id contact_id,c.phone
     FROM customer_agent_jobs j JOIN messages m ON m.id=j.inbound_id JOIN conversations v ON v.id=j.conversation_id
     JOIN contacts c ON c.id=v.contact_id WHERE j.status='queued' ORDER BY j.created_at,j.rowid LIMIT 1`).get();
@@ -306,7 +313,7 @@ export async function processCustomerAgent(db,env,transport,key,origin){
   let decision;
   if(!windowOpen(job.received_at)){
     decision={reason:'window',state:'handoff',facts:prior};
-  }else if(intent==='lookup'){
+  }else if(intent==='lookup'&&cfg.mode==='provider'){
     const candidates=agentCandidates(job.body,knowledge);
     try{
       const choice=candidates.length&&!requestsAgentRegistration(job.body)?await chooseAgentSource(job.body,candidates,cfg.instructions,env.CUSTOMER_AGENT_OPENAI_KEY,transport,prior):undefined;
@@ -349,12 +356,14 @@ function updateAgentSettings(db,user,input,env,config){
   const suffixInput=text(input.pilot_suffix??old.pilot_suffix,'نهاية رقم الاختبار',6,false);
   if((pilotName||suffixInput)&&(!/^[0-9٠-٩۰-۹]{2,6}$/.test(suffixInput)||nameWords(pilotName).split(' ').length<2))fail(400,'أدخل اسم الاختبار من كلمتين على الأقل وآخر رقمين إلى ستة أرقام');
   const pilotSuffix=normalizeSearch(suffixInput);
+  const mode=input.mode??old.mode,companyKnowledgeEnabled=input.company_knowledge??old.company_knowledge;
+  if(!['local','provider'].includes(mode)||typeof companyKnowledgeEnabled!=='boolean')fail(400,'اختر وضع رد صالحًا');
   const scopeChanged=pilotName!==old.pilot_name||pilotSuffix!==old.pilot_suffix;
-  const value={...old,enabled:input.enabled,instructions,replies:customReplies,forbidden,manager_id:user.id,pilot_name:pilotName,pilot_suffix:pilotSuffix,revision:old.revision+1};
+  const value={...old,enabled:input.enabled,mode,company_knowledge:companyKnowledgeEnabled,instructions,replies:customReplies,forbidden,manager_id:user.id,pilot_name:pilotName,pilot_suffix:pilotSuffix,revision:old.revision+1};
   if(scopeChanged)Object.assign(value,{pilot_contact_id:null,pilot_phone_hash:null,phone_id:null});
   if(input.enabled){
     if(scopeChanged)fail(409,'احفظ نطاق الاختبار أولًا ثم اختر السجل المطابق');
-    if(!providerReady(env))fail(409,'التجربة الحية تحتاج موافقة تفعيل مزود التصنيف وإعداداته على الخادم');
+    if(!engineReady(env,value))fail(409,'التجربة الحية تحتاج موافقة تفعيل مزود التصنيف وإعداداته على الخادم');
     const candidates=pilotCandidates(db,value);
     if(candidates.length!==1)fail(409,candidates.length?'أكثر من سجل يطابق اسم ورقم الاختبار. يلزم تحديد السجل الصحيح قبل التفعيل.':'لم يُعثر على سجل اختبار مطابق');
     const [contact]=candidates;
@@ -365,7 +374,7 @@ function updateAgentSettings(db,user,input,env,config){
   transaction(db,()=>{
     writeSettings(db,value);
     invalidateJobs(db);
-    audit(db,user,'agent_settings_changed','customer_agent','settings',{enabled:value.enabled,revision:value.revision});
+    audit(db,user,'agent_settings_changed','customer_agent','settings',{enabled:value.enabled,mode:value.mode,company_knowledge:value.company_knowledge,revision:value.revision});
   });
 }
 
@@ -449,7 +458,7 @@ function agentDashboard(db,env){
   const reasons=db.prepare("SELECT reason,COUNT(*) count FROM customer_agent_jobs WHERE reason<>'' GROUP BY reason ORDER BY count DESC").all();
   const history=db.prepare(`SELECT a.action,a.entity_id,a.metadata,a.created_at,u.name actor FROM audit a
     LEFT JOIN users u ON u.id=a.user_id WHERE a.entity='customer_agent' ORDER BY a.created_at DESC,a.rowid DESC LIMIT 40`).all();
-  return {enabled:cfg.enabled,provider_ready:providerReady(env),model:agentModel,instructions:cfg.instructions,replies:cfg.replies,default_replies:agentReplies,forbidden:cfg.forbidden,
+  return {enabled:cfg.enabled,mode:cfg.mode,company_knowledge:cfg.company_knowledge,company_sources:companyKnowledge,company_reviewed:companyKnowledgeReviewed,provider_ready:providerReady(env),model:agentModel,instructions:cfg.instructions,replies:cfg.replies,default_replies:agentReplies,forbidden:cfg.forbidden,
     pilot_contact_id:cfg.pilot_contact_id,pilot_name:cfg.pilot_name,pilot_suffix:cfg.pilot_suffix,candidates,sources,threads,metrics,reasons,history};
 }
 
@@ -504,7 +513,9 @@ export async function handleCustomerAgent({db,user,path,method,req,res,jsonBody,
   if(path==='/api/customer-agent/preview'&&method==='POST'){
     const input=await jsonBody(req);
     const body=text(input.body,'رسالة اختبار اصطناعية',1600);
-    const cfg=settings(db),sources=activeSources(db,cfg),sourceList=sources.filter(row=>!row.official_fee);
+    const current=settings(db);
+    const cfg=input.local===true&&input.provider!==true?{...current,mode:'local'}:current;
+    const sources=activeSources(db,cfg),sourceList=sources.filter(row=>!row.official_fee);
     const candidates=agentCandidates(body,sourceList);
     const qualifies=agentCanQualify(body,sourceList);
     let choice=candidates.length?undefined:qualifies?'qualify':undefined;

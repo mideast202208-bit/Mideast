@@ -6,6 +6,7 @@ import {now,uid} from '../src/service.mjs';
 import {sendNext} from '../src/whatsapp.mjs';
 import {processMediaJob} from '../src/media.mjs';
 import {agentCandidates,agentDecision,agentIntent,chooseAgentSource,safeAgentAnswer} from '../src/customer-agent-policy.mjs';
+import {companyKnowledge} from '../src/customer-agent-company.mjs';
 import {fixture,renderFixture} from './ui-fixture.mjs';
 
 const endpoint='/api/customer-agent';
@@ -71,6 +72,31 @@ test('owner can review knowledge and preview safely with the provider disabled',
     assert.equal(dashboard.candidates[0].suffix,'89');assert(!JSON.stringify(dashboard).includes(pilotPhone));
     assert.equal(dashboard.history[0].actor,f.users.owner.name);
     assert.equal(count(f,'messages'),0);assert.equal(count(f,'customer_agent_jobs'),0);assert.equal(f.externalCalls,0);
+  }finally{await f.close();}
+});
+
+test('the local agent uses public website answers and hands off without calling an AI provider',async()=>{
+  const f=await inboundFixture({followup:false});
+  try{
+    const admin=session(f,f.users.owner),id=addPilot(f);
+    assert.equal((await prepare(f,admin)).status,200);
+    for(const entry of companyKnowledge){
+      const preview=(await request(f,endpoint+'/preview',admin,{body:entry.question,local:true})).data;
+      assert.equal(preview.source_id,entry.id);
+      assert.ok(safeAgentAnswer(entry.answer));
+    }
+    assert.equal((await request(f,endpoint+'/preview',admin,{body:'هل عندكم مواعيد الامتحانات لجامعة بعينها؟',local:true})).data.reason,'uncertain');
+    assert.equal((await request(f,endpoint+'/settings',admin,{enabled:true,mode:'local',pilot_contact_id:id},'PATCH')).status,200);
+    await inbound(f,'local-site','هل تساعدوني في الدراسات العليا والماجستير؟');
+    await f.app.agentTick();
+    assert.match(outgoing(f)[0].body,/للماجستير/);
+    await inbound(f,'local-office','أتعاب المكتب كام؟');
+    await f.app.agentTick();
+    assert.equal(f.db.prepare('SELECT reason FROM customer_agent_threads').get().reason,'finance');
+    assert.ok(safeAgentAnswer(outgoing(f).at(-1).body));
+    assert.equal(f.db.prepare("SELECT COUNT(*) n FROM tasks WHERE status='open'").get().n,1);
+    assert.equal(count(f,'leads'),1);
+    assert.equal(f.externalCalls,0);
   }finally{await f.close();}
 });
 

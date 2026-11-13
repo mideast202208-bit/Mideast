@@ -85,7 +85,9 @@ function rankCandidates(body,entries){
 }
 
 export function agentCandidates(body,entries){
-  const ranked=rankCandidates(body,entries);
+  const reviewed=entries.filter(entry=>!entry.topics);
+  const direct=rankCandidates(body,reviewed);
+  const ranked=direct.length?direct:rankCandidates(body,entries.filter(entry=>entry.topics)).filter(entry=>entry.topics.some(topic=>entry.matchKey.split(' ').includes(topic)));
   if(ranked.length>1&&ranked[1].hits===ranked[0].hits&&ranked[1].matchKey===ranked[0].matchKey&&ranked[1].answer!==ranked[0].answer&&
      (!ranked[0].url||ranked[1].url!==ranked[0].url||ranked[0].question===ranked[1].question))return [];
   return ranked.slice(0,5);
