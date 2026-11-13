@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { encryptSecret, decryptSecret } from './integration-settings.mjs';
 import { fail, audit } from './service.mjs';
+import { transaction } from './db.mjs';
 const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 export function base32(bytes){let bits=0,value=0,out='';for(const byte of bytes){value=(value<<8)|byte;bits+=8;while(bits>=5){out+=alphabet[(value>>>(bits-5))&31];bits-=5;}}if(bits)out+=alphabet[(value<<(5-bits))&31];return out;}
 function decode32(text){let bits=0,value=0;const out=[];for(const ch of text.toUpperCase().replace(/=+$/,'')){const index=alphabet.indexOf(ch);if(index<0)throw new Error('Invalid base32');value=(value<<5)|index;bits+=5;if(bits>=8){out.push((value>>>(bits-8))&255);bits-=8;}}return Buffer.from(out);}
@@ -23,23 +24,44 @@ export function verifyFactor(db,userId,code,key,{requireEnabled=true}={}){
   }
   return false;
 }
-export async function handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key}){
+export async function handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key,requireCurrentPassword}){
   const respond=(status,data)=>{sendJson(res,status,data);return true;};
-  if(path==='/api/security/mfa'&&method==='GET')return respond(200,{enabled:Boolean(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(user.id)?.enabled)});
+  const enabled=()=>Boolean(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(user.id)?.enabled);
+  const revokeOtherSessions=()=>db.prepare('DELETE FROM sessions WHERE user_id=? AND hash<>?').run(user.id,user.hash);
+  if(path==='/api/security/mfa'&&method==='GET')return respond(200,{enabled:enabled()});
   if(path==='/api/security/mfa/enroll'&&method==='POST'){
-    if(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(user.id)?.enabled)fail(409,'المصادقة مفعلة بالفعل');
+    const input=await jsonBody(req,8192);
+    await requireCurrentPassword(req,user,input.current_password);
+    if(enabled())fail(409,'المصادقة مفعلة بالفعل');
     const secret=base32(randomBytes(20));
-    db.prepare('INSERT INTO login_factors(user_id,secret_cipher) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET secret_cipher=excluded.secret_cipher,last_counter=NULL').run(user.id,encryptSecret(secret,key));
-    audit(db,user,'enrollment_started','mfa',user.id);
+    transaction(db,()=>{
+      db.prepare('INSERT INTO login_factors(user_id,secret_cipher) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET secret_cipher=excluded.secret_cipher,last_counter=NULL').run(user.id,encryptSecret(secret,key));
+      audit(db,user,'enrollment_started','mfa',user.id);
+    });
     return respond(200,{secret,uri:`otpauth://totp/${encodeURIComponent('Mid East:'+user.email)}?secret=${secret}&issuer=Mid%20East&algorithm=SHA1&digits=6&period=30`});
   }
   if(path==='/api/security/mfa/confirm'&&method==='POST'){
-    const input=await jsonBody(req);if(!verifyFactor(db,user.id,input.code,key,{requireEnabled:false}))fail(400,'رمز التحقق غير صحيح أو استُخدم بالفعل');
-    db.prepare('UPDATE login_factors SET enabled=1 WHERE user_id=?').run(user.id);audit(db,user,'enabled','mfa',user.id);return respond(200,{ok:true});
+    const input=await jsonBody(req,8192);
+    await requireCurrentPassword(req,user,input.current_password);
+    transaction(db,()=>{
+      if(enabled())fail(409,'المصادقة مفعلة بالفعل');
+      if(!verifyFactor(db,user.id,input.code,key,{requireEnabled:false}))fail(400,'رمز التحقق غير صحيح أو استُخدم بالفعل');
+      db.prepare('UPDATE login_factors SET enabled=1 WHERE user_id=?').run(user.id);
+      revokeOtherSessions();
+      audit(db,user,'enabled','mfa',user.id);
+    });
+    return respond(200,{ok:true});
   }
   if(path==='/api/security/mfa/disable'&&method==='POST'){
-    const input=await jsonBody(req);if(!verifyFactor(db,user.id,input.code,key))fail(400,'رمز التحقق غير صحيح أو استُخدم بالفعل');
-    db.prepare('DELETE FROM login_factors WHERE user_id=?').run(user.id);audit(db,user,'disabled','mfa',user.id);return respond(200,{ok:true});
+    const input=await jsonBody(req,8192);
+    await requireCurrentPassword(req,user,input.current_password);
+    transaction(db,()=>{
+      if(!verifyFactor(db,user.id,input.code,key))fail(400,'رمز التحقق غير صحيح أو استُخدم بالفعل');
+      db.prepare('DELETE FROM login_factors WHERE user_id=?').run(user.id);
+      revokeOtherSessions();
+      audit(db,user,'disabled','mfa',user.id);
+    });
+    return respond(200,{ok:true});
   }
   return false;
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHmac, scryptSync } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,10 +13,12 @@ import { uid, now } from '../src/service.mjs';
 test('Original Mid East platform integration and access boundaries',async t=>{
   const db=openDatabase(':memory:');const password='Synthetic-test-only-2026!';
   const encoded=await hashPassword(password);
+  const legacySalt='8b91c3411d7dcfb96ab57638ff1f8ed1';
+  const legacyHash='scrypt:'+legacySalt+':'+scryptSync(password,legacySalt,64).toString('hex');
   const accounts={};
   for(const [name,role] of [['Owner','admin'],['Agent One','agent'],['Agent Two','agent'],['Accountant','accountant']]){
     const id=uid(),email=name.replaceAll(' ','').toLowerCase()+'@example.test';
-    db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run(id,name,email,encoded,role,1,now());
+    db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run(id,name,email,role==='admin'?legacyHash:encoded,role,1,now());
     accounts[name]={id,email};
   }
   let sendCount=0,transportThrows=false;
@@ -46,6 +48,12 @@ test('Original Mid East platform integration and access boundaries',async t=>{
   const inbound=(id,body='أريد استشارة',phone='201130343708')=>({object:'whatsapp_business_account',entry:[{changes:[{value:{metadata:{phone_number_id:env.META_PHONE_NUMBER_ID},contacts:[{wa_id:phone,profile:{name:'Test inbound'}}],messages:[{id,from:phone,timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body}}]}}]}]});
   let contact,lead,invoice,conversation;
   try{
+    await t.test('successful sign-in upgrades legacy hashes without exposing them',()=>{
+      const saved=db.prepare('SELECT password FROM users WHERE id=?').get(accounts.Owner.id).password;
+      assert.match(saved,/^scrypt-v2:/);
+      assert.notEqual(saved,legacyHash);
+      assert.ok(!saved.includes(password));
+    });
     await t.test('public access cannot read CRM or create records',async()=>{
       assert.equal((await request('/api/data')).status,401);
       assert.equal((await request('/api/contacts','POST',{name:'No auth'})).status,401);
@@ -148,7 +156,8 @@ test('Original Mid East platform integration and access boundaries',async t=>{
       await app.tick();await app.tick();assert.equal(sendCount,3);assert.equal(db.prepare('SELECT status FROM messages WHERE id=?').get(result.body.id).status,'unknown');
     });
     await t.test('disabling a user revokes all their existing sessions',async()=>{
-      assert.equal((await request('/api/users/'+accounts['Agent Two'].id,'PATCH',{active:false},admin)).status,200);
+      assert.equal((await request('/api/users/'+accounts['Agent Two'].id,'PATCH',{active:false},admin)).status,400);
+      assert.equal((await request('/api/users/'+accounts['Agent Two'].id,'PATCH',{active:false,current_password:password},admin)).status,200);
       assert.equal((await request('/api/data','GET',undefined,two)).status,401);
       assert.equal((await request('/api/users/'+accounts.Owner.id,'PATCH',{active:false},admin)).status,400);
     });
@@ -172,6 +181,25 @@ test('Original Mid East platform integration and access boundaries',async t=>{
       assert.equal(loggedIn.status,200);
       admin.cookie=loggedIn.response.headers.get('set-cookie').split(';')[0];admin.csrf=loggedIn.body.csrf;
       assert.equal(db.prepare("SELECT metadata FROM audit WHERE action='password_changed' AND entity_id=?").get(accounts.Owner.id).metadata,'{}');
+    });
+    await t.test('staff provisioning and reset recheck the owner password and expire the staff session',async()=>{
+      const staffPassword='Synthetic-staff-created-2026!';
+      const email='new-staff@example.test';
+      const account={name:'New staff',email,role:'agent',password:staffPassword};
+      assert.equal((await request('/api/users','POST',account,admin)).status,400);
+      const currentPassword='Synthetic-owner-replacement-2026!';
+      const added=await request('/api/users','POST',{...account,current_password:currentPassword},admin);
+      assert.equal(added.status,201);
+      const entered=await request('/api/login','POST',{email,password:staffPassword});
+      assert.equal(entered.status,200);
+      const staffAuth={cookie:entered.response.headers.get('set-cookie').split(';')[0],csrf:entered.body.csrf};
+      const reset='/api/users/'+added.body.id,newPassword='Synthetic-staff-reset-2026!';
+      assert.equal((await request(reset,'PATCH',{password:newPassword},admin)).status,400);
+      assert.equal((await request(reset,'PATCH',{password:newPassword,current_password:currentPassword},admin)).status,200);
+      assert.equal((await request('/api/me','GET',undefined,staffAuth)).status,401);
+      assert.equal((await request('/api/login','POST',{email,password:staffPassword})).status,401);
+      assert.equal((await request('/api/login','POST',{email,password:newPassword})).status,200);
+      assert.equal(db.prepare("SELECT metadata FROM audit WHERE action='password_reset' AND entity_id=?").get(added.body.id).metadata,'{}');
     });
     await t.test('audit excludes credentials and provider tokens',async()=>{
       const result=await request('/api/audit','GET',undefined,admin);assert.equal(result.status,200);assert.ok(result.body.length>10);

@@ -91,6 +91,12 @@ function customInputs(entity,values={}){
   }).join('');
 }
 function customValues(form,entity){const result={};for(const field of fieldsFor(entity)){const control=form.elements['custom_'+field.field_key];if(!control)continue;if(field.type==='boolean')result[field.field_key]=control.checked;else if(control.value!=='')result[field.field_key]=field.type==='number'?Number(control.value):control.value;}if(data.apps.find(a=>a.id===entity)?.app_key==='me_students'&&result.nationality){const country=countries.find(c=>c.name===result.nationality);if(country)result.nationality_code=country.code;}return result;}
+const currentPasswordField='<label>كلمة مرور حسابك الحالية<input name="current_password" type="password" autocomplete="current-password" dir="ltr" maxlength="256" required></label>';
+const factorField='<label>رمز جديد من تطبيق المصادقة<input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" dir="ltr" required></label>';
+async function accountVerificationFields(){
+  factorState=await api('/security/mfa');
+  return currentPasswordField+(factorState.enabled?factorField:'');
+}
 function modal(title,body,submitLabel='حفظ'){
   $('#modal').className='';
   $('#modal').innerHTML=`<div class="modalhead"><h2>${title}</h2><button class="close" type="button" data-close>×</button></div><div class="modalbody"><form id="editor">${body}<div class="formerror" id="modalerror"></div><div class="modalfoot"><button class="btn primary" type="submit">${submitLabel}</button><button class="btn" type="button" data-close>إلغاء</button></div></form></div>`;
@@ -104,7 +110,7 @@ function login(){
   clearInterval(refreshTimer);Object.assign(recordDates,defaultRecordDates);datedInbox=null;serviceOrder='newest';factorState=null;crmInbox=null;crmUnread=0;crmRevision='';refreshCrmPending=false;$('#app').innerHTML=`<main class="login"><div class="loginart"><div class="brand"><div class="brandmark">م</div><div><b>ميد إيست</b><small>BUSINESS WORKSPACE</small></div></div><h1>كل محادثة،<br>فرصة لبداية جديدة.</h1><p>مساحة واحدة لفريقك، من أول رسالة إلى إتمام الخدمة ومتابعة العميل.</p><div class="badge">الإصدار 0.10</div></div><div class="loginform"><form id="loginform"><h2>أهلًا برجوعك</h2><p class="sub">ادخل حسابك لفتح مساحة عمل ميد إيست.</p><label>البريد الإلكتروني</label><input name="email" type="email" dir="ltr" required autocomplete="username"><label>كلمة المرور</label><input name="password" type="password" dir="ltr" required autocomplete="current-password"><label>رمز تطبيق المصادقة — لو مفعل</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"><div class="formerror" id="loginerror"></div><button class="btn primary" type="submit">دخول مساحة العمل ←</button><p class="footnote">حساب المدير يُنشأ عند تجهيز السيرفر. لو نسيت كلمة المرور تواصل مع مالك النظام.</p></form></div></main>`;
   $('#loginform').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;try{const result=await api('/login','POST',Object.fromEntries(new FormData(form)));user=result.user;csrf=result.csrf;page=user.role==='accountant'?'finance':'dashboard';await load();startRefresh();}catch(error){$('#loginerror').textContent=error.message;}finally{btn.disabled=false;}});
 }
-async function load(){data=await api('/data');if(user.role!=='accountant'&&(!crmInbox||page==='tickets')){try{await syncCrmInbox();}catch{}if(!user)return;}if(page==='tickets')await loadDatedInbox();if(!user)return;await studentRecords.load();await workspace.load(page);if(page==='marketing')await marketing.load();if(page==='customer-agent'&&user.role==='admin')await customerAgent.load();if(user.role!=='accountant'&&['dashboard','hub','registrations','social','templates','lab'].includes(page))hubState=await api('/hub');if(page==='integrations')integration=await api('/integrations');render();}
+async function load(){data=await api('/data');if(user.role!=='accountant'&&(!crmInbox||page==='tickets')){try{await syncCrmInbox();}catch{}if(!user)return;}if(page==='tickets')await loadDatedInbox();if(!user)return;await studentRecords.load();await workspace.load(page);if(page==='marketing')await marketing.load();if(page==='customer-agent'&&user.role==='admin')await customerAgent.load();if(user.role!=='accountant'&&['dashboard','hub','registrations','social','templates','lab'].includes(page))hubState=await api('/hub');if(page==='integrations')integration=await api('/integrations');if(page==='security')factorState=await api('/security/mfa');render();}
 function inboxRevision(value){
   return JSON.stringify([value.activity.map(e=>e.seq),value.waiting.map(e=>e.lead_id),value.waiting_count,value.enabled,value.failures?.map(e=>e.id)]);
 }
@@ -406,14 +412,20 @@ async function action(name,id){
   }
   if(name==='toggle-rule'){const rule=data.automations.find(r=>r.id===id);await api('/automations/'+id,'PATCH',{active:!rule.active});await load();return;}
   if(name==='user'){
-    const form=modal('حساب موظف جديد',`<label>اسم الموظف *</label><input name="name" required><label>البريد الإلكتروني *</label><input name="email" type="email" dir="ltr" required><label>الدور</label><select name="role">${selectOptions(roles,'agent')}</select><label>كلمة المرور — 12 حرفًا على الأقل</label><input name="password" type="password" minlength="12" autocomplete="new-password" required>`);
-    bindForm(form,async(values)=>api('/users','POST',Object.fromEntries(values)));return;
+    const verification=await accountVerificationFields();
+    const form=modal('حساب موظف جديد',`<label>اسم الموظف *</label><input name="name" required><label>البريد الإلكتروني *</label><input name="email" type="email" dir="ltr" required><label>الدور</label><select name="role">${selectOptions(roles,'agent')}</select><label>كلمة مرور الموظف — 12 حرفًا على الأقل</label><input name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>${verification}`);
+    bindForm(form,values=>api('/users','POST',Object.fromEntries(values)));return;
   }
-  if(name==='toggle-user'){const target=data.users.find(u=>u.id===id);await api('/users/'+id,'PATCH',{active:!target.active});await load();toast('تم تحديث الحساب وإنهاء جلساته السابقة');return;}
+  if(name==='toggle-user'){
+    const target=data.users.find(u=>u.id===id),verification=await accountVerificationFields();
+    const form=modal((target.active?'إيقاف ':'تفعيل ')+escape(target.name),verification,'تأكيد');
+    bindForm(form,values=>api('/users/'+id,'PATCH',{...Object.fromEntries(values),active:!target.active}));return;
+  }
   if(name==='edit-user'){
-    const target=data.users.find(u=>u.id===id);
-    const form=modal('صلاحيات '+escape(target.name),`<label>الدور</label><select name="role">${selectOptions(roles,target.role)}</select><label>كلمة مرور جديدة — اتركها فارغة للاحتفاظ بالحالية</label><input name="password" type="password" minlength="12" autocomplete="new-password"><p class="footnote">حفظ التعديل ينهي جلسات الحساب السابقة. لا يمكنك إلغاء دور المالك من حسابك الحالي.</p>`);
-    bindForm(form,async(values)=>{const body=Object.fromEntries(values);if(!body.password)delete body.password;await api('/users/'+id,'PATCH',body);if(id===user.id){$('#modal').close();user=null;login();}});return;
+    if(id===user.id){await advancedAction('change-password');return;}
+    const target=data.users.find(u=>u.id===id),verification=await accountVerificationFields();
+    const form=modal('صلاحيات '+escape(target.name),`<label>الدور</label><select name="role">${selectOptions(roles,target.role)}</select><label>كلمة مرور جديدة للموظف<input name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password"></label><p class="footnote">اترك كلمة مرور الموظف فارغة للاحتفاظ بها. عند تغيير الصلاحيات أو كلمة المرور، تنتهي جلسات الموظف.</p>${verification}`);
+    bindForm(form,values=>{const body=Object.fromEntries(values);if(!body.password)delete body.password;return api('/users/'+id,'PATCH',body);});return;
   }
   if(name==='invoice'){
     if(!data.contacts.length&&!data.invoiceContacts?.length){toast('يلزم وجود عميل أولًا',true);return;}
@@ -492,7 +504,7 @@ function advancedView(){
     const wa=integration?.whatsapp;
     return heading('الربط والإعدادات','البيانات الحساسة تُحفظ مشفّرة على السيرفر، ولا تظهر بعد حفظها.')+`<div class="panel"><div class="panelhead"><h2>WhatsApp Cloud API</h2>${badge(wa?.configured?'الإعداد موجود — يلزم اختبار حي':'الإعداد غير مكتمل',wa?.configured?'amber':'')}</div>${user.role==='admin'?`<form id="wa-settings"><div class="formgrid"><div><label>معرف الرقم Phone Number ID</label><input name="phoneId" dir="ltr" value="${escape(wa?.phone_id||'')}"></div><div><label>حساب WhatsApp — WABA ID</label><input name="wabaId" dir="ltr" value="${escape(wa?.waba_id||'')}"></div><div><label>إصدار Graph المدعوم</label><input name="version" dir="ltr" placeholder="vNN.0" value="${escape(wa?.version||'')}"></div><div><label>موظف استقبال العملاء الجدد</label><select name="intakeUser"><option value="">اختر موظفًا</option>${data.users.filter(u=>u.active&&u.role!=='accountant').map(u=>`<option value="${u.id}" ${wa?.intake_user===u.id?'selected':''}>${escape(u.name)}</option>`).join('')}</select></div><div><label>Access Token ${wa?.token_set?'· محفوظ، اتركه فارغًا للاحتفاظ به':''}</label><input name="accessToken" type="password" autocomplete="new-password" dir="ltr"></div><div><label>App Secret ${wa?.app_secret_set?'· محفوظ':''}</label><input name="appSecret" type="password" autocomplete="new-password" dir="ltr"></div><div><label>Verify Token ${wa?.verify_token_set?'· محفوظ':''}</label><input name="verifyToken" type="password" autocomplete="new-password" dir="ltr"></div></div><label><input name="autoMedia" type="checkbox" ${wa?.auto_media?'checked':''}> تنزيل المرفقات الواردة تلقائيًا إلى ملف العميل (حتى 10 ميجابايت)</label><p class="footnote">اكتب أسرار الربط داخل نسختك المنشورة عبر HTTPS. الحقول السرية الفارغة تحتفظ بالقيمة السابقة. قد تتطلب Meta تحقق الحساب وصلاحيات وتفعيل وسيلة الدفع.</p><div class="actions"><button class="btn primary" type="submit">حفظ إعداد الربط</button><button class="btn" type="button" data-action="test-whatsapp">اختبار الاتصال</button></div></form>`:'<p class="sub">إدارة الأسرار متاحة لمالك النظام.</p>'}<div class="notebox" style="margin-top:20px">عنوان Webhook على نطاقك: <span class="mono">/webhooks/whatsapp</span><br>تسجيله والاشتراك في أحداث Meta خطوة خارجية تحتاج تفويض الحساب.</div></div><div class="panel"><div class="panelhead"><h2>قوالب واتساب</h2><button class="btn" data-action="sync-templates">مزامنة مع Meta</button></div>${data.templates.length?`<div class="tablewrap"><table><thead><tr><th>القالب</th><th>اللغة</th><th>التصنيف</th><th>الحالة</th></tr></thead><tbody>${data.templates.map(t=>`<tr><td class="mono">${escape(t.name)}</td><td>${escape(t.language)}</td><td>${escape(t.category)}</td><td>${badge(t.status,t.status==='APPROVED'?'green':'amber')}</td></tr>`).join('')}</tbody></table></div>`:empty('لم تُزامن القوالب','تُعرض هنا حالة اعتماد القالب بعد الربط والمزامنة')}</div>${user.role==='admin'?`<div class="panel"><h2>هوية الشركة</h2><form id="settingsform"><label>اسم الشركة</label><input name="company_name" value="${escape(data.settings.company_name||'ميد إيست')}"><button class="btn primary" style="margin-top:15px">حفظ الاسم</button></form></div><div class="panel"><h2>تصدير السجلات</h2><p class="sub">يشمل العملاء والفرص والتطبيقات المخصصة. الرسائل والملفات والأسرار المشفرة ضمن النسخة الكاملة للسيرفر.</p><a class="btn" href="/api/export">تنزيل JSON</a></div>`:''}`;
   }
-  if(page==='security')return heading('أمان حسابك','غيّر كلمة مرورك وراجع المصادقة بخطوتين.')+`<section class="panel"><h2>كلمة المرور</h2><button type="button" class="btn primary" data-action="change-password">تغيير كلمة المرور</button></section><div class="panel"><h2>المصادقة بخطوتين</h2><p class="sub">${factorState?.enabled?'مفعّلة على حسابك.':'تحقق من الحالة، ثم فعّلها باستخدام تطبيق مصادقة على هاتفك.'}</p><div class="actions" style="margin-top:20px"><button class="btn" data-action="mfa-status">تحديث الحالة</button><button class="btn primary" data-action="mfa-enroll">تفعيل المصادقة</button>${factorState?.enabled?'<button class="btn danger" data-action="mfa-disable">إيقاف المصادقة</button>':''}</div><p class="footnote">احتفظ بمفتاح المصادقة في مكان آمن. استعادة فقدان الهاتف في هذا الإصدار تحتاج مسؤول السيرفر؛ لا توجد أكواد استرداد ذاتية بعد.</p></div>`;
+  if(page==='security')return heading('أمان حسابك','غيّر كلمة مرورك وراجع المصادقة بخطوتين.')+`<section class="panel"><h2>كلمة المرور</h2><button type="button" class="btn primary" data-action="change-password">تغيير كلمة المرور</button></section><div class="panel"><h2>المصادقة بخطوتين</h2><p class="sub">${factorState?.enabled?'مفعّلة على حسابك.':'تحقق من الحالة، ثم فعّلها باستخدام تطبيق مصادقة على هاتفك.'}</p><div class="actions" style="margin-top:20px"><button class="btn" data-action="mfa-status">تحديث الحالة</button>${factorState?.enabled?'<button class="btn danger" data-action="mfa-disable">إيقاف المصادقة</button>':'<button class="btn primary" data-action="mfa-enroll">تفعيل المصادقة</button>'}</div><p class="footnote">احتفظ بمفتاح المصادقة في مكان آمن. استعادة فقدان الهاتف في هذا الإصدار تحتاج مسؤول السيرفر؛ لا توجد أكواد استرداد ذاتية بعد.</p></div>`;
   return null;
 }
 async function advancedAction(name,id){
@@ -549,14 +561,15 @@ async function advancedAction(name,id){
     bindForm(form,async(values)=>{const cached=approved.find(t=>t.id===values.get('cached_template')),parameters=String(values.get('parameters')).split('\n').filter(v=>v.trim()).map(v=>({type:'text',text:v}));await api(`/conversations/${selectedConversation}/messages`,'POST',{kind:'template',template_name:cached?.name||values.get('template_name'),language:cached?.language||values.get('language'),components:parameters.length?[{type:'body',parameters}]:[]});chatMessages=await api(`/conversations/${selectedConversation}/messages`);});return true;
   }
   if(name==='change-password'){
-    const form=modal('تغيير كلمة المرور',`<label>كلمة المرور الحالية<input name="current_password" type="password" autocomplete="current-password" dir="ltr" maxlength="256" required></label>
+    const verification=await accountVerificationFields();
+    const form=modal('تغيير كلمة المرور',`${verification}
       <label>كلمة المرور الجديدة<input name="new_password" type="password" autocomplete="new-password" dir="ltr" minlength="12" maxlength="256" required></label>
       <label>تأكيد كلمة المرور الجديدة<input name="confirm_password" type="password" autocomplete="new-password" dir="ltr" minlength="12" maxlength="256" required></label>
       <p class="sub">بعد الحفظ، سجّل الدخول بالكلمة الجديدة. ستنتهي جلسات حسابك على الأجهزة الأخرى.</p>`,'تغيير كلمة المرور');
     bindForm(form,async values=>{
       const newPassword=values.get('new_password');
       if(newPassword!==values.get('confirm_password'))throw new Error('كلمتا المرور الجديدتان غير متطابقتين');
-      await api('/security/password','POST',{current_password:values.get('current_password'),new_password:newPassword});
+      await api('/security/password','POST',{current_password:values.get('current_password'),new_password:newPassword,code:values.get('code')});
       form.reset();$('#modal').close();recordMessenger.reset();user=null;csrf=null;
       login();toast('تم تغيير كلمة المرور. سجّل الدخول بالكلمة الجديدة.');
     });
@@ -564,13 +577,24 @@ async function advancedAction(name,id){
   }
   if(name==='mfa-status'){factorState=await api('/security/mfa');render();return true;}
   if(name==='mfa-enroll'){
-    const result=await api('/security/mfa/enroll','POST',{});
-    const form=modal('تفعيل تطبيق المصادقة',`<p class="sub">أضف حسابًا جديدًا يدويًا في تطبيق المصادقة، والصق المفتاح التالي. النوع: زمني، 6 أرقام، 30 ثانية.</p><label>المفتاح السري — احتفظ به بأمان</label><input value="${escape(result.secret)}" readonly dir="ltr"><label>رمز التحقق من التطبيق</label><input name="code" inputmode="numeric" pattern="[0-9]{6}" required autocomplete="one-time-code">`,'تأكيد التفعيل');
-    bindForm(form,async(values)=>{await api('/security/mfa/confirm','POST',{code:values.get('code')});factorState={enabled:true};});return true;
+    const first=modal('إعداد تطبيق المصادقة',currentPasswordField,'عرض مفتاح الإعداد');
+    first.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const submit=first.querySelector('[type=submit]');
+      submit.disabled=true;
+      try{
+        const result=await api('/security/mfa/enroll','POST',Object.fromEntries(new FormData(first)));
+        first.reset();$('#modal').close();
+        const form=modal('تأكيد تطبيق المصادقة',`<p class="sub">أضف حسابًا يدويًا في تطبيق المصادقة باستخدام المفتاح التالي. اختَر رمزًا زمنيًا من ست خانات يتغير كل ثلاثين ثانية.</p><label>مفتاح الإعداد<input value="${escape(result.secret)}" readonly dir="ltr"></label>${currentPasswordField}${factorField}`,'تفعيل المصادقة');
+        bindForm(form,values=>api('/security/mfa/confirm','POST',Object.fromEntries(values)));
+      }catch(error){$('#modalerror').textContent=error.message;}
+      finally{submit.disabled=false;}
+    });
+    return true;
   }
   if(name==='mfa-disable'){
-    const form=modal('إيقاف المصادقة بخطوتين',`<label>رمز جديد من تطبيق المصادقة</label><input name="code" pattern="[0-9]{6}" inputmode="numeric" required>`);
-    bindForm(form,async(values)=>{await api('/security/mfa/disable','POST',{code:values.get('code')});factorState={enabled:false};});return true;
+    const form=modal('إيقاف المصادقة بخطوتين',currentPasswordField+factorField,'إيقاف المصادقة');
+    bindForm(form,values=>api('/security/mfa/disable','POST',Object.fromEntries(values)));return true;
   }
   return false;
 }

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { openDatabase, transaction } from './db.mjs';
-import { token, hash, hashPassword, checkPassword, validSignature, normalizePhone } from './security.mjs';
+import { token, hash, hashPassword, checkPassword, passwordNeedsUpgrade, validSignature, normalizePhone } from './security.mjs';
 import { uid, now, manager, finance, fail, text, audit, owner, getContact, validateCustom,
   runAutomations, createContact, createLead, getData } from './service.mjs';
 import { acceptWebhook, processWebhookQueue, queueMessage, sendNext } from './whatsapp.mjs';
@@ -35,6 +35,8 @@ import {startupPreflight} from './startup-preflight.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/',import.meta.url));
 const websiteFramePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors https://mideastedu-eg.com https://www.mideastedu-eg.com; base-uri 'none'; form-action 'self'";
+// Unknown accounts still perform one password comparison before the generic error.
+const dummyPasswordHash = 'scrypt-v2:'+token().slice(0,32)+':'+token()+token();
 const safeUser = row => ({id:row.id,name:row.name,email:row.email,role:row.role});
 export function createApp(options = {}) {
   const env = options.env || process.env;
@@ -89,6 +91,19 @@ export function createApp(options = {}) {
     if(!session)fail(401,'انتهت الجلسة؛ سجّل الدخول');
     if(write && req.headers['x-csrf-token']!==session.csrf)fail(403,'رمز حماية الجلسة غير صالح');
     return session;
+  }
+  async function requireCurrentPassword(req,user,password){
+    rateLimit('reauth:'+user.id,12,300000);
+    if(!await checkPassword(password,user.password))fail(400,'كلمة المرور الحالية غير صحيحة');
+    authenticate(req,true);
+  }
+  function requireCurrentFactor(user,code){
+    if(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(user.id)?.enabled&&
+       !verifyFactor(db,user.id,code,secretKey))fail(400,'أدخل رمزًا جديدًا من تطبيق المصادقة');
+  }
+  function revokeAccountSessions(userId){
+    db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+    db.prepare('DELETE FROM login_factors WHERE user_id=? AND enabled=0').run(userId);
   }
   function conversationFor(user,id){
     const conversation=db.prepare('SELECT * FROM conversations WHERE id=?').get(id);
@@ -157,22 +172,29 @@ export function createApp(options = {}) {
       }
       if(path==='/api/setup'&&method==='POST'){
         rateLimit('setup:'+req.socket.remoteAddress,10,900000);
-        sendJson(res,201,await bootstrapOwner(db,await jsonBody(req),env.BOOTSTRAP_TOKEN));return;
+        sendJson(res,201,await bootstrapOwner(db,await jsonBody(req,8192),env.BOOTSTRAP_TOKEN));return;
       }
       if(path==='/api/login' && method==='POST'){
-        const input=await jsonBody(req);
-        const email=text(input.email,'البريد',254).toLowerCase();
         rateLimit('login:'+req.socket.remoteAddress,40,900000);
+        const input=await jsonBody(req,8192);
+        const email=text(input.email,'البريد',254).toLowerCase();
         rateLimit('account:'+email,10,900000);
         const row=db.prepare('SELECT * FROM users WHERE email=? AND active=1').get(email);
-        if(!row || !await checkPassword(input.password,row.password) ||
-          !db.prepare('SELECT 1 FROM users WHERE id=? AND active=1 AND password=? AND role=?').get(row.id,row.password,row.role))fail(401,'البريد أو كلمة المرور غير صحيحة');
-        if(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(row.id)?.enabled && !verifyFactor(db,row.id,input.code,secretKey))fail(401,'أدخل رمز المصادقة من تطبيقك؛ لا يمكن إعادة استخدام الرمز');
+        const valid=await checkPassword(input.password,row?.password??dummyPasswordHash);
+        if(!row||!valid)fail(401,'البريد أو كلمة المرور غير صحيحة');
+        const upgraded=passwordNeedsUpgrade(row.password)?await hashPassword(input.password):null;
         const value=token(),csrf=token();
-        db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now());
-        db.prepare('INSERT INTO sessions VALUES(?,?,?,?)').run(hash(value),row.id,csrf,new Date(Date.now()+8*3600000).toISOString());
+        transaction(db,()=>{
+          const fresh=db.prepare('SELECT 1 FROM users WHERE id=? AND active=1 AND password=? AND role=?').get(row.id,row.password,row.role);
+          if(!fresh)fail(401,'تعذر تسجيل الدخول. حاول مرة أخرى.');
+          if(db.prepare('SELECT enabled FROM login_factors WHERE user_id=?').get(row.id)?.enabled&&!verifyFactor(db,row.id,input.code,secretKey))fail(401,'أدخل رمز المصادقة من تطبيقك؛ لا يمكن إعادة استخدام الرمز');
+          if(upgraded)db.prepare('UPDATE users SET password=? WHERE id=?').run(upgraded,row.id);
+          db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now());
+          db.prepare('INSERT INTO sessions VALUES(?,?,?,?)').run(hash(value),row.id,csrf,new Date(Date.now()+8*3600000).toISOString());
+          audit(db,row,'login','user',row.id);
+        });
         res.setHeader('Set-Cookie',`me_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${production?'; Secure':''}`);
-        audit(db,row,'login','user',row.id);sendJson(res,200,{user:safeUser(row),csrf});return;
+        sendJson(res,200,{user:safeUser(row),csrf});return;
       }
       const user=authenticate(req,write);
       responseUsers.set(res,user);
@@ -189,14 +211,15 @@ export function createApp(options = {}) {
         rateLimit('password-change:'+user.id,8,900000);
         const input=await jsonBody(req,8192);
         if(typeof input.new_password!=='string'||input.new_password.length<12||input.new_password.length>256)fail(400,'كلمة المرور الجديدة من 12 إلى 256 حرفًا');
-        if(!await checkPassword(input.current_password,user.password))fail(400,'كلمة المرور الحالية غير صحيحة');
+        await requireCurrentPassword(req,user,input.current_password);
         if(input.current_password===input.new_password)fail(400,'اختر كلمة مرور مختلفة عن الحالية');
         const password=await hashPassword(input.new_password);
         transaction(db,()=>{
           authenticate(req,true);
+          requireCurrentFactor(user,input.code);
           const result=db.prepare('UPDATE users SET password=? WHERE id=? AND active=1 AND password=?').run(password,user.id,user.password);
           if(!result.changes)fail(409,'تغيرت كلمة المرور؛ سجّل الدخول من جديد');
-          db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+          revokeAccountSessions(user.id);
           audit(db,user,'password_changed','user',user.id);
         });
         res.setHeader('Set-Cookie',`me_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${production?'; Secure':''}`);
@@ -216,7 +239,7 @@ export function createApp(options = {}) {
       if(await handleAssistant({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
       if(await handleOmni({db,user,path,method,req,res,jsonBody,sendJson,secretKey,origin,config,transport}))return;
       if(await handleBusiness({db,user,path,method,req,res,jsonBody,sendJson,config}))return;
-      if(await handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key:secretKey}))return;
+      if(await handleMfa({db,user,path,method,req,jsonBody,sendJson,res,key:secretKey,requireCurrentPassword}))return;
       if(await handleExtensions({db,user,path,method,req,res,jsonBody,sendJson,config,secretKey,transport,conversationFor}))return;
       if(path==='/api/integrations' && method==='GET'){
         if(!manager(user))fail(403,'للإدارة فقط');
@@ -356,21 +379,50 @@ export function createApp(options = {}) {
         const result=db.prepare('UPDATE automations SET active=? WHERE id=?').run(input.active?1:0,automationMatch[1]);if(!result.changes)fail(404,'القاعدة غير موجودة');audit(db,user,'updated','automation',automationMatch[1]);sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/users' && method==='POST'){
-        if(user.role!=='admin')fail(403,'إدارة المستخدمين للمالك');const input=await jsonBody(req);
-        const name=text(input.name,'الاسم');const email=text(input.email,'البريد',254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'بريد غير صالح');
+        if(user.role!=='admin')fail(403,'إدارة المستخدمين للمالك');
+        const input=await jsonBody(req,8192);
+        const name=text(input.name,'الاسم'),email=text(input.email,'البريد',254).toLowerCase();
+        if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'بريد غير صالح');
         if(!['admin','manager','agent','accountant'].includes(input.role))fail(400,'دور غير صالح');
-        if(db.prepare('SELECT id FROM users WHERE email=?').get(email))fail(409,'البريد مسجل');
-        let password;try{password=await hashPassword(input.password);}catch(error){fail(400,error.message);}
-        const id=uid();db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run(id,name,email,password,input.role,1,now());audit(db,user,'created','user',id);sendJson(res,201,{id});return;
+        await requireCurrentPassword(req,user,input.current_password);
+        let password;
+        try{password=await hashPassword(input.password);}catch(error){fail(400,error.message);}
+        const id=uid();
+        transaction(db,()=>{
+          authenticate(req,true);
+          requireCurrentFactor(user,input.code);
+          if(db.prepare('SELECT id FROM users WHERE email=?').get(email))fail(409,'البريد مسجل');
+          db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run(id,name,email,password,input.role,1,now());
+          audit(db,user,'created','user',id);
+        });
+        sendJson(res,201,{id});return;
       }
       const userMatch=path.match(/^\/api\/users\/([^/]+)$/);
       if(userMatch && method==='PATCH'){
-        if(user.role!=='admin')fail(403,'للمالك فقط');const input=await jsonBody(req),target=db.prepare('SELECT * FROM users WHERE id=?').get(userMatch[1]);if(!target)fail(404,'المستخدم غير موجود');
-        if(target.id===user.id && (input.active===false || (input.role && input.role!=='admin')))fail(400,'لا يمكنك إلغاء صلاحيتك الحالية');
-        if(target.id===user.id&&input.password)fail(400,'غيّر كلمة مرور حسابك من أمان الحساب');
-        const role=input.role ?? target.role;if(!['admin','manager','agent','accountant'].includes(role))fail(400,'دور غير صالح');
-        let password=target.password;if(input.password){try{password=await hashPassword(input.password);}catch(error){fail(400,error.message);}}
-        transaction(db,()=>{db.prepare('UPDATE users SET role=?,active=?,password=? WHERE id=?').run(role,input.active===undefined?target.active:input.active?1:0,password,target.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(db,user,'updated','user',target.id);});
+        if(user.role!=='admin')fail(403,'للمالك فقط');
+        const input=await jsonBody(req,8192),id=userMatch[1];
+        if(id===user.id){
+          if(input.password!==undefined)fail(400,'غيّر كلمة مرور حسابك من أمان الحساب');
+          if(input.active===false||(input.role&&input.role!=='admin'))fail(400,'لا يمكنك إلغاء صلاحيتك الحالية');
+        }
+        if(input.role!==undefined&&!['admin','manager','agent','accountant'].includes(input.role))fail(400,'دور غير صالح');
+        if(input.active!==undefined&&typeof input.active!=='boolean')fail(400,'حالة حساب غير صالحة');
+        await requireCurrentPassword(req,user,input.current_password);
+        let password;
+        if(input.password!==undefined){
+          try{password=await hashPassword(input.password);}catch(error){fail(400,error.message);}
+        }
+        transaction(db,()=>{
+          authenticate(req,true);
+          requireCurrentFactor(user,input.code);
+          const target=db.prepare('SELECT role,active FROM users WHERE id=?').get(id);
+          if(!target)fail(404,'المستخدم غير موجود');
+          const role=input.role??target.role,active=input.active===undefined?target.active:Number(input.active);
+          if(!password&&role===target.role&&active===target.active)return;
+          db.prepare('UPDATE users SET role=?,active=?,password=COALESCE(?,password) WHERE id=?').run(role,active,password??null,id);
+          revokeAccountSessions(id);
+          audit(db,user,password?'password_reset':'updated','user',id);
+        });
         sendJson(res,200,{ok:true});return;
       }
       if(path==='/api/invoices' && method==='POST'){

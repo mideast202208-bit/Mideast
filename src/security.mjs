@@ -4,19 +4,26 @@ import { promisify } from 'node:util';
 const scryptAsync = promisify(scrypt);
 export const token = () => randomBytes(32).toString('hex');
 export const hash = value => createHash('sha256').update(value).digest('hex');
+const passwordHashV2 = 'scrypt-v2';
+const scryptOptions = Object.freeze({N:16384,r:8,p:5,maxmem:32*1024*1024});
+const legacyScryptOptions = {...scryptOptions,p:1};
+const passwordHashPattern = /^(scrypt-v2|scrypt):([a-f0-9]{32}):([a-f0-9]{128})$/;
+export const passwordNeedsUpgrade = stored => typeof stored === 'string' && stored.startsWith('scrypt:');
+
 export async function hashPassword(password) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 256) throw new Error('كلمة المرور من 12 إلى 256 حرفًا');
   const salt = randomBytes(16).toString('hex');
-  const key = await scryptAsync(password, salt, 64, { N: 16384, r: 8, p: 1 });
-  return `scrypt:${salt}:${key.toString('hex')}`;
+  const key = await scryptAsync(password, salt, 64, scryptOptions);
+  return `${passwordHashV2}:${salt}:${key.toString('hex')}`;
 }
+
 export async function checkPassword(password, stored) {
   if (typeof password !== 'string' || password.length > 256) return false;
-  const [algorithm, salt, hex] = String(stored).split(':');
-  if (algorithm !== 'scrypt' || !salt || !hex) return false;
-  const key = await scryptAsync(password, salt, 64, { N: 16384, r: 8, p: 1 });
-  const expected = Buffer.from(hex, 'hex');
-  return expected.length === key.length && timingSafeEqual(expected, key);
+  const parsed = passwordHashPattern.exec(String(stored));
+  if (!parsed) return false;
+  const [,algorithm,salt,hex] = parsed;
+  const key = await scryptAsync(password, salt, 64, algorithm===passwordHashV2?scryptOptions:legacyScryptOptions);
+  return timingSafeEqual(Buffer.from(hex, 'hex'), key);
 }
 export function validSignature(raw, signature, secret) {
   if (!secret || !signature) return false;
