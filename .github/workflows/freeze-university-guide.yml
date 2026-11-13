@@ -1,0 +1,27 @@
+name: Freeze the public university guide
+on:
+  push:
+    branches: [guide/render-migration]
+    paths: [deploy/university-guide.mjs, .github/workflows/freeze-university-guide.yml]
+permissions:
+  contents: write
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node deploy/university-guide.mjs
+        env:
+          GUIDE_ORIGIN: https://guide-render.invalid
+      - name: Store verified pages with their assets
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --force published-guide
+          git commit -m "Store the self-contained university guide snapshot"
+          git push origin HEAD:guide/render-migration
