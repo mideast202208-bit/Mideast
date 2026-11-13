@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { resolve } from 'node:path';
-import { openDatabase } from '../src/db.mjs';
+import { openDatabase, transaction } from '../src/db.mjs';
 import { hashPassword } from '../src/security.mjs';
 import { uid, now } from '../src/service.mjs';
 import { installEducationWorkspace } from '../src/education.mjs';
@@ -36,9 +36,12 @@ try{
   if(password!==await hidden('Confirm password (hidden): '))throw new Error('Passwords do not match.');
   const encoded=await hashPassword(password);
   const ownerId=uid();
-  db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run(ownerId,name,email,encoded,'admin',1,now());
-  db.prepare('INSERT INTO settings VALUES(?,?)').run('company_name','ميد إيست');
-  db.prepare('INSERT INTO settings VALUES(?,?)').run('currency','EGP');
+  transaction(db,()=>{
+    if(db.prepare('SELECT id FROM users LIMIT 1').get())throw new Error('An administrator already exists. Setup does not replace accounts.');
+    db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run(ownerId,name,email,encoded,'admin',1,now());
+    db.prepare("INSERT OR REPLACE INTO settings VALUES('company_name',?)").run('ميد إيست');
+    db.prepare("INSERT OR REPLACE INTO settings VALUES('currency','EGP')").run();
+  });
   installEducationWorkspace(db,{id:ownerId,role:'admin'});
   console.log('Administrator created. Password was not printed or stored in source.');
 }finally{db.close();}

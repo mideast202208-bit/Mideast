@@ -97,14 +97,26 @@ test('v0.2 studio, workflows, integration settings and MFA',async t=>{
       const result=await request('/whatsapp/templates/sync','POST',{},admin);assert.equal(result.status,200);assert.equal(result.body.count,1);assert.equal(networkCalls,1);
       assert.equal(db.prepare('SELECT status FROM wa_templates').get().status,'APPROVED');
     });
-    await t.test('MFA enrollment requires a valid time code and blocks password-only login',async()=>{
-      const result=await request('/security/mfa/enroll','POST',{},agent);assert.equal(result.status,200);
-      assert.equal((await request('/security/mfa/confirm','POST',{code:'000000'},agent)).status,400);
-      const counter=Math.floor(Date.now()/30000),code=totp(result.body.secret,counter);
-      assert.equal((await request('/security/mfa/confirm','POST',{code},agent)).status,200);
+    await t.test('MFA enrollment and password changes require credentials and revoke older sessions',async()=>{
+      const mfa='/security/mfa';
+      const older=await login('Agent');
+      assert.equal((await request(mfa+'/enroll','POST',{},agent)).status,400);
+      const result=await request(mfa+'/enroll','POST',{current_password:password},agent);
+      assert.equal(result.status,200);
+      assert.equal(result.response.headers.get('cache-control'),'no-store');
+      const counter=Math.floor(Date.now()/30000),code=totp(result.body.secret,counter-1);
+      assert.equal((await request(mfa+'/confirm','POST',{code},agent)).status,400);
+      assert.equal((await request(mfa+'/confirm','POST',{code,current_password:password},agent)).status,200);
+      assert.equal((await request('/me','GET',undefined,older)).status,401);
       assert.equal((await login('Agent')).status,401);
       assert.equal((await login('Agent',code)).status,401);
-      assert.equal((await login('Agent',totp(result.body.secret,counter+1))).status,200);
+      assert.equal((await request(mfa+'/disable','POST',{code:totp(result.body.secret,counter)},agent)).status,400);
+      const update={current_password:password,new_password:'Synthetic-mfa-updated-2026!'};
+      assert.equal((await request('/security/password','POST',update,agent)).status,400);
+      assert.equal((await request('/security/password','POST',{...update,code:totp(result.body.secret,counter)},agent)).status,200);
+      assert.equal((await request('/me','GET',undefined,agent)).status,401);
+      const entered=await request('/login','POST',{email:users.Agent.email,password:update.new_password,code:totp(result.body.secret,counter+1)});
+      assert.equal(entered.status,200);
     });
   }finally{await new Promise(resolve=>app.server.close(resolve));db.close();}
 });
