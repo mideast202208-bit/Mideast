@@ -1,3 +1,4 @@
+import {createOfficeFinance} from '../public/office-finance.js';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import {createCustomerAgent} from '../public/customer-agent.js';
@@ -18,10 +19,10 @@ export async function renderFixture(data=fixture){
   const stripImports=source=>source.replace(/^import .*$/gm,'');
   const modules=['brand-icons.js','documents.js','countries.js','workspace.js','marketing.js'].map(file=>stripImports(readFileSync(new URL('../public/'+file,import.meta.url),'utf8')).replace(/export function /g,'function ').replace(/export const /g,'const ')).join('\n');
   const source=modules+'\n'+stripImports(readFileSync(new URL('../public/app.js',import.meta.url),'utf8'));
-  const sandbox={createCustomerAgent,createStudentRecords,filterRecordsBySearch,sectionSearch,updateSectionSearch,createRecordViews,createRecordMessenger,cairoDay,chatHistory,console,Date,Intl,Map,Set,JSON,Math,Number,String,Array,Object,RegExp,Error,Promise,FormData,
+  const sandbox={createOfficeFinance,createCustomerAgent,createStudentRecords,filterRecordsBySearch,sectionSearch,updateSectionSearch,createRecordViews,createRecordMessenger,cairoDay,chatHistory,console,Date,Intl,Map,Set,JSON,Math,Number,String,Array,Object,RegExp,Error,Promise,FormData,
     setInterval:()=>0,clearInterval(){},setTimeout:()=>0,
     document:{querySelector:element,addEventListener(){},activeElement:null},
-    fetch:async path=>({ok:true,status:200,json:async()=>path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:path.endsWith('/hub')?(data.hub||{}):path.endsWith('/communication')?data.communication:path.endsWith('/assistant')?data.assistant:path.endsWith('/marketing')?data.marketing:path.endsWith('/customer-agent')?data.customerAgent:data})};
+    fetch:async path=>({ok:true,status:200,json:async()=>path.startsWith('/api/finance/expenses')?{month:'2026-11',totals:[],expenses:[]}:path.endsWith('/setup/status')?{required:false}:path.endsWith('/me')?{user:data.users[0],csrf:'synthetic'}:path.endsWith('/hub')?(data.hub||{}):path.endsWith('/communication')?data.communication:path.endsWith('/assistant')?data.assistant:path.endsWith('/marketing')?data.marketing:path.endsWith('/customer-agent')?data.customerAgent:data})};
   const script=new vm.Script(`(async()=>{${source}\nreturn {searchPage:(key,query)=>{page=key;search=query;render();return document.querySelector('#app').innerHTML;},recordMode:(entity,mode)=>{page=entity;recordViews.action('record-view',entity+'|'+mode);render();return document.querySelector('#app').innerHTML;},marketingTab:async(tab)=>{page='marketing';await load();await marketing.action('marketing-tab',tab);return document.querySelector('#app').innerHTML;},pageAsync:async(key)=>{page=key;await load();return document.querySelector('#app').innerHTML;},page:(key)=>{page=key;render();return document.querySelector('#app').innerHTML;},studio:(entity)=>{studioEntity=entity;page='studio';render();return document.querySelector('#app').innerHTML;}};})()`);
   return script.runInNewContext(sandbox);
 }

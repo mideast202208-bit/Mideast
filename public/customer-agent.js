@@ -15,7 +15,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     const metrics=[['المحادثات',d.metrics.conversations],['العملاء الجدد',d.metrics.new_customers],['فرص تحتاج متابعة',d.metrics.followups],['بانتظار تدخل بشري',d.metrics.handoffs]];
     const scope=d.enabled?'تجربة واتساب محدودة':'متوقف';
     return `<header class="pagehead"><div><h1>وكيل خدمة العملاء الذكي</h1><p class="sub">التعليمات والمعرفة والتجربة وسجل التدخل البشري.</p></div><button type="button" class="btn" data-action="agent-refresh">تحديث</button></header>
-    <section class="panel"><h2>التحكم والتجربة</h2><p><b>${e(scope)}</b> · ${d.provider_ready?'إعداد المزود متاح على الخادم':'المزوّد الخارجي غير مفعّل'}</p>
+    <section class="panel"><h2>التحكم والتجربة</h2><p><b>${e(scope)}</b> · ${d.mode==='local'?'الرد من المعرفة داخل المنصة':d.provider_ready?'إعداد المزود متاح على الخادم':'المزوّد الخارجي غير مفعّل'}</p>
     <p class="sub">التجربة الحية محصورة في سجل واتساب واحد. الرسوم الرسمية تحتاج مصدرًا معتمدًا. أسئلة أتعاب المكتب والمستندات الواردة تتحوّل للإدارة.</p>
     <div class="actions"><button type="button" class="btn primary" data-action="agent-preview">اختبار اصطناعي</button>
     <button type="button" class="btn" data-action="agent-settings">الإعدادات والتعليمات</button>
@@ -23,6 +23,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
     <section class="metrics" aria-label="مؤشرات الوكيل">${metrics.map(([label,value])=>'<article class="metric"><span>'+e(label)+'</span><strong>'+e(value??0)+'</strong></article>').join('')}</section>
     <section class="panel"><div class="panelhead"><h2>مصادر المعرفة</h2><div class="actions"><button type="button" class="btn" data-action="agent-website-import">استيراد من موقع الشركة</button><button type="button" class="btn" data-action="agent-source">إضافة سؤال ومصدر</button></div></div>
     <p class="sub">راجع الإجابة ورابطها وتاريخ صلاحيتها قبل اعتمادها. المصادر المنتهية لا تُستخدم.</p>
+    ${d.company_sources?.length?`<details><summary>معرفة موقع ميدل إيست للرد داخل المنصة (${d.company_sources.length})</summary><p class="sub">${d.company_knowledge?'تُستخدم في وضع الرد داخل المنصة عند عدم وجود مصدر إداري مطابق.':'أوقفتها الإدارة.'} · مراجعة ${e(d.company_reviewed)}</p>${d.company_sources.map(source=>'<p><b>'+e(source.title)+'</b><br>'+e(source.answer)+'</p>').join('')}<p><a href="https://mideastedu-eg.com/" target="_blank" rel="noopener noreferrer">موقع ميدل إيست</a></p></details>`:''}
     ${d.sources.map(source=>`<article class="fieldcard"><div><b>${e(source.title)}</b><p class="sub">${e(source.question)}</p>
       <p>${e(source.answer)}</p><p class="sub">${e({draft:'مسودة',approved:'معتمد',disabled:'موقوف'}[source.status])} · آخر تحديث ${e(date(source.updated_at))}${source.reviewed_until?' · صالح حتى '+e(date(source.reviewed_until)):''}${source.reviewer?' · '+e(source.reviewer):''}</p>
       ${source.url?'<a href="'+e(source.url)+'" target="_blank" rel="noopener noreferrer">فتح المصدر العام</a>':''}</div>
@@ -49,7 +50,7 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
       button.disabled=true;
       try{
         const input=new FormData(form),provider=input.has('provider');
-        const value=await api('/customer-agent/preview','POST',{body:input.get('body'),provider,synthetic:provider,instructions:input.get('instructions')});
+        const value=await api('/customer-agent/preview','POST',{body:input.get('body'),provider,local:!provider,synthetic:provider,instructions:input.get('instructions')});
         result.innerHTML='<p><b>'+e(reasons[value.reason]||value.reason)+'</b> · '+(value.mode==='provider_preview'?'اختبار المزوّد':'اختبار محلي')+'</p><p>'+e(value.reply||'')+'</p>';
       }catch(error){result.textContent=error.message;}
       finally{button.disabled=false;}
@@ -79,6 +80,8 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
       const candidates=d.candidates.length===1?'<option value="'+e(d.candidates[0].id)+'" '+(d.pilot_contact_id===d.candidates[0].id?'selected':'')+'>'+e(d.candidates[0].name)+' · ‎••'+e(d.candidates[0].suffix)+'</option>':'';
       const form=modal('إعدادات وتعليمات الوكيل',`<label>تعليمات عامة للوكيل<textarea name="instructions" rows="4" maxlength="1500">${e(d.instructions)}</textarea></label>
        <p class="sub">حدّد نطاق الإجابة وأسلوب الأسئلة. الوكيل يربط المقتطفات المعتمدة ويستخدم ردود المتابعة التي تختارها.</p>
+       <label>طريقة الرد<select name="mode"><option value="provider" ${d.mode==='local'?'':'selected'}>التصنيف بالمزوّد الخارجي</option><option value="local" ${d.mode==='local'?'selected':''}>الرد من المعرفة داخل المنصة</option></select></label>
+       <label><input type="checkbox" name="company_knowledge" ${d.company_knowledge===false?'':'checked'}> استخدام معرفة موقع ميدل إيست في وضع الرد داخل المنصة</label>
        <details><summary>الردود التي أريد الوكيل يقولها</summary>${Object.entries(replyLabels).map(([key,label])=>'<label>'+e(label)+'<textarea name="reply_'+key+'" rows="2" maxlength="420" placeholder="'+e(d.default_replies[key])+'">'+e(d.replies[key]||'')+'</textarea></label>').join('')}</details>
        <label>عبارات ممنوع قولها<textarea name="forbidden" rows="4" maxlength="1200" placeholder="اكتب عبارة واحدة في كل سطر">${e(d.forbidden.join('\n'))}</textarea></label>
        <p class="sub">العبارات الممنوعة تُفحص قبل الإرسال. رابط التسجيل يُرسل في أول تواصل فقط، وتستمر المتابعة على نفس الطلب. أضف الرسوم الرسمية من مصادر المعرفة بعد مراجعتها.</p>
@@ -87,8 +90,8 @@ export function createCustomerAgent({api,escape:e,modal,bindForm,toast,render,ge
        <p class="sub">احفظ الاسم ونهاية الرقم والوكيل متوقف، ثم ارجع لاختيار السجل المطابق.</p>
        <label>نطاق التجربة<select name="pilot_contact_id"><option value="">اختر السجل المؤكد</option>${candidates}</select></label>
        ${d.candidates.length===1?'':'<p class="sub">التفعيل معلق إلى أن يتوفر تطابق فريد لسجل الاختبار.</p>'}
-       <label><input type="checkbox" name="enabled" ${d.enabled?'checked':''} ${d.provider_ready?'':'disabled'}> تشغيل الوكيل على محادثة واتساب التجريبية</label>`);
-      bindForm(form,v=>api('/customer-agent/settings','PATCH',{enabled:v.has('enabled'),instructions:v.get('instructions'),forbidden:v.get('forbidden'),replies:Object.fromEntries(Object.keys(replyLabels).map(key=>[key,v.get('reply_'+key)])),pilot_name:v.get('pilot_name'),pilot_suffix:v.get('pilot_suffix'),pilot_contact_id:v.get('pilot_contact_id')}));
+       <label><input type="checkbox" name="enabled" ${d.enabled?'checked':''}> تشغيل الوكيل على محادثة واتساب التجريبية</label>`);
+      bindForm(form,v=>api('/customer-agent/settings','PATCH',{enabled:v.has('enabled'),mode:v.get('mode'),company_knowledge:v.has('company_knowledge'),instructions:v.get('instructions'),forbidden:v.get('forbidden'),replies:Object.fromEntries(Object.keys(replyLabels).map(key=>[key,v.get('reply_'+key)])),pilot_name:v.get('pilot_name'),pilot_suffix:v.get('pilot_suffix'),pilot_contact_id:v.get('pilot_contact_id')}));
       return true;
     }
     if(name==='agent-website-import'){

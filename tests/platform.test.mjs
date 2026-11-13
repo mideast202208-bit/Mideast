@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { openDatabase } from '../src/db.mjs';
 import { createApp } from '../src/server.mjs';
 import { hashPassword } from '../src/security.mjs';
+import {cairoDay} from '../public/chat-ui.js';
 import { uid, now } from '../src/service.mjs';
 
 test('Original Mid East platform integration and access boundaries',async t=>{
@@ -114,6 +115,24 @@ test('Original Mid East platform integration and access boundaries',async t=>{
       assert.equal((await request('/api/invoices/'+invoice.id+'/payments','POST',{amount_minor:5000,reference:'Too much'},accountant)).status,409);
       assert.equal((await request('/api/invoices/'+invoice.id,'PATCH',{status:'void'},accountant)).status,409);
       const data=await request('/api/data','GET',undefined,accountant);assert.equal(data.body.invoices[0].paid_minor,6000);
+    });
+    await t.test('office expenses are restricted, idempotent, audited and totaled by currency',async()=>{
+      const path='/api/finance/expenses',day=cairoDay();
+      const item={request_id:uid(),expense_date:day,category:'advertising',description:'Synthetic campaign',amount_minor:2500,currency:'EGP'};
+      assert.equal((await request(path,'GET',undefined,one)).status,403);
+      assert.equal((await request(path,'POST',item,one)).status,403);
+      assert.equal((await request(path,'POST',{...item,expense_date:'2026-02-30'},accountant)).status,400);
+      assert.equal((await request(path,'POST',item,accountant)).status,201);
+      assert.equal((await request(path,'POST',item,accountant)).body.replayed,true);
+      assert.equal((await request(path,'POST',{...item,amount_minor:2600},accountant)).status,409);
+      assert.equal((await request(path,'POST',{...item,request_id:uid(),currency:'USD',amount_minor:1000},accountant)).status,201);
+      const report=await request(path+'?month='+day.slice(0,7),'GET',undefined,accountant);
+      assert.deepEqual(report.body.totals,[{currency:'EGP',paid_minor:6000,expenses_minor:2500},{currency:'USD',paid_minor:0,expenses_minor:1000}]);
+      assert.equal((await request(path+'/'+item.request_id,'PATCH',{reason:'Synthetic cancellation'},accountant)).status,200);
+      const after=await request(path,'GET',undefined,admin);
+      assert.equal(after.body.totals[0].expenses_minor,0);
+      assert.ok(after.body.expenses.find(row=>row.id===item.request_id).voided_at);
+      assert.equal(db.prepare("SELECT COUNT(*) n FROM audit WHERE entity='office_expense' AND action='voided'").get().n,1);
     });
     await t.test('webhook rejects invalid signatures and confirms verification challenge',async()=>{
       const invalid=await fetch(base+'/webhooks/whatsapp',{method:'POST',headers:{'X-Hub-Signature-256':'sha256=wrong'},body:'{}'});assert.equal(invalid.status,403);
