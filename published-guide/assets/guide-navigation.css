@@ -1,0 +1,14 @@
+/* Static navigation works before JavaScript, including pages opened directly. */
+.me-guide-return{position:sticky;top:0;z-index:21000;display:flex;align-items:center;justify-content:center;gap:8px;padding:8px max(12px,env(safe-area-inset-right));background:#fff;border-bottom:1px solid #dce5db;box-shadow:0 3px 15px #10364b0d;font-family:Tajawal,Tahoma,Arial,sans-serif;direction:rtl}
+.me-guide-return a{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 15px;border-radius:12px;color:#10364b;background:#f0f5ec;text-decoration:none;font-size:14px;font-weight:700;line-height:1.4;white-space:nowrap}
+.me-guide-return a.me-return-home{color:#fff;background:#10364b}
+.me-guide-return a:hover{background:#dceacc;color:#10364b}.me-guide-return a:focus-visible{outline:3px solid #80b73e;outline-offset:2px}
+.me-fee-unconfirmed{display:block;color:#77551d;font-weight:700}
+html[data-me-theme=dark] .me-guide-return{background:#102c3b;border-color:#355160}
+html[data-me-theme=dark] .me-guide-return a{background:#234556;color:#fff}
+.me-premium .mp-dock{left:50%!important;right:auto!important;transform:translateX(-50%)!important;box-sizing:border-box}
+@media(max-width:600px){.me-guide-return{gap:6px;padding:6px 8px}.me-guide-return a{flex:1;min-width:0;font-size:12px;padding:7px 8px}.me-guide-return a.me-return-home{flex:1.1}.me-premium .mp-dock{width:calc(100vw - 16px)!important;max-width:calc(100vw - 16px)!important}.me-premium .mp-dock>a,.me-premium .mp-dock>button{flex:1 1 0;min-width:0!important;padding:7px 3px!important}}
+@media print{.me-guide-return{display:none}}
+
+/* The academic directory has no sidebar after removal of service content. */
+.layout.directory-only-layout{grid-template-columns:minmax(0,1fr)}
