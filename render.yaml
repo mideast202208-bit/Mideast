@@ -24,6 +24,8 @@ services:
         value: /app/data/server.key
       - key: BOOTSTRAP_TOKEN
         generateValue: true
+      - key: CRM_LOCAL_ASSISTANTS_ONLY
+        value: "1"
       - key: BACKUP_INTERVAL_HOURS
         value: "24"
       - key: BACKUP_DIR
