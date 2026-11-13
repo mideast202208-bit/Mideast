@@ -19,7 +19,8 @@ const defaultSettings = {enabled:false,mode:'provider',company_knowledge:true,in
 
 function settings(db){
   const row=db.prepare('SELECT value FROM settings WHERE key=?').get(settingsKey);
-  return row?{...defaultSettings,...JSON.parse(row.value)}:{...defaultSettings};
+  const saved=row?{...defaultSettings,...JSON.parse(row.value)}:{...defaultSettings};
+  return process.env.CRM_LOCAL_ASSISTANTS_ONLY==='1'?{...saved,mode:'local'}:saved;
 }
 
 function writeSettings(db,value){
@@ -39,7 +40,7 @@ function pilotCandidates(db,cfg){
 }
 
 function providerReady(env){
-  return env.RECOVERY_MODE!=='1'&&env.CUSTOMER_AGENT_OPENAI_APPROVED==='1'&&Boolean(env.CUSTOMER_AGENT_OPENAI_KEY?.trim());
+  return process.env.CRM_LOCAL_ASSISTANTS_ONLY!=='1'&&env.RECOVERY_MODE!=='1'&&env.CUSTOMER_AGENT_OPENAI_APPROVED==='1'&&Boolean(env.CUSTOMER_AGENT_OPENAI_KEY?.trim());
 }
 
 function engineReady(env,cfg){
@@ -356,7 +357,7 @@ function updateAgentSettings(db,user,input,env,config){
   const suffixInput=text(input.pilot_suffix??old.pilot_suffix,'نهاية رقم الاختبار',6,false);
   if((pilotName||suffixInput)&&(!/^[0-9٠-٩۰-۹]{2,6}$/.test(suffixInput)||nameWords(pilotName).split(' ').length<2))fail(400,'أدخل اسم الاختبار من كلمتين على الأقل وآخر رقمين إلى ستة أرقام');
   const pilotSuffix=normalizeSearch(suffixInput);
-  const mode=input.mode??old.mode,companyKnowledgeEnabled=input.company_knowledge??old.company_knowledge;
+  const mode=process.env.CRM_LOCAL_ASSISTANTS_ONLY==='1'?'local':input.mode??old.mode,companyKnowledgeEnabled=input.company_knowledge??old.company_knowledge;
   if(!['local','provider'].includes(mode)||typeof companyKnowledgeEnabled!=='boolean')fail(400,'اختر وضع رد صالحًا');
   const scopeChanged=pilotName!==old.pilot_name||pilotSuffix!==old.pilot_suffix;
   const value={...old,enabled:input.enabled,mode,company_knowledge:companyKnowledgeEnabled,instructions,replies:customReplies,forbidden,manager_id:user.id,pilot_name:pilotName,pilot_suffix:pilotSuffix,revision:old.revision+1};
@@ -458,7 +459,7 @@ function agentDashboard(db,env){
   const reasons=db.prepare("SELECT reason,COUNT(*) count FROM customer_agent_jobs WHERE reason<>'' GROUP BY reason ORDER BY count DESC").all();
   const history=db.prepare(`SELECT a.action,a.entity_id,a.metadata,a.created_at,u.name actor FROM audit a
     LEFT JOIN users u ON u.id=a.user_id WHERE a.entity='customer_agent' ORDER BY a.created_at DESC,a.rowid DESC LIMIT 40`).all();
-  return {enabled:cfg.enabled,mode:cfg.mode,company_knowledge:cfg.company_knowledge,company_sources:companyKnowledge,company_reviewed:companyKnowledgeReviewed,provider_ready:providerReady(env),model:agentModel,instructions:cfg.instructions,replies:cfg.replies,default_replies:agentReplies,forbidden:cfg.forbidden,
+  return {enabled:cfg.enabled,mode:cfg.mode,company_knowledge:cfg.company_knowledge,company_sources:companyKnowledge,local_only:process.env.CRM_LOCAL_ASSISTANTS_ONLY==='1',company_reviewed:companyKnowledgeReviewed,provider_ready:providerReady(env),model:agentModel,instructions:cfg.instructions,replies:cfg.replies,default_replies:agentReplies,forbidden:cfg.forbidden,
     pilot_contact_id:cfg.pilot_contact_id,pilot_name:cfg.pilot_name,pilot_suffix:cfg.pilot_suffix,candidates,sources,threads,metrics,reasons,history};
 }
 

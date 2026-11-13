@@ -2,13 +2,13 @@ import {uid,now,fail,text,audit,manager,getData} from './service.mjs';
 import {encryptSecret,decryptSecret} from './integration-settings.mjs';
 import {accountSummary} from './accounts.mjs';
 
-function settings(db,key){const stored=db.prepare("SELECT value FROM settings WHERE key='assistant.configuration'").get()?.value;return stored?JSON.parse(decryptSecret(stored,key)):{enabled:false,model:'',apiKey:''};}
+function settings(db,key){if(process.env.CRM_LOCAL_ASSISTANTS_ONLY==='1')return {enabled:false,model:'',apiKey:''};const stored=db.prepare("SELECT value FROM settings WHERE key='assistant.configuration'").get()?.value;return stored?JSON.parse(decryptSecret(stored,key)):{enabled:false,model:'',apiKey:''};}
 export function assistantSettings(db,user,key){
  if(!manager(user))fail(403,'مساعد الإدارة للإدارة فقط');const cfg=settings(db,key);
- return {enabled:Boolean(cfg.enabled&&cfg.apiKey&&cfg.model),key_set:Boolean(cfg.apiKey),model:cfg.model||'',mode:cfg.enabled&&cfg.apiKey?'openai':'local',daily_request_limit:30};
+ return {local_only:process.env.CRM_LOCAL_ASSISTANTS_ONLY==='1',enabled:Boolean(cfg.enabled&&cfg.apiKey&&cfg.model),key_set:Boolean(cfg.apiKey),model:cfg.model||'',mode:cfg.enabled&&cfg.apiKey?'openai':'local',daily_request_limit:30};
 }
 export function saveAssistantSettings(db,user,input,key){
- if(user.role!=='admin')fail(403,'إعداد المساعد للمالك');const cfg=settings(db,key);
+ if(user.role!=='admin')fail(403,'إعداد المساعد للمالك');if(process.env.CRM_LOCAL_ASSISTANTS_ONLY==='1')fail(409,'مساعد الإدارة يعمل داخليًا في هذه المنصة');const cfg=settings(db,key);
  if(input.apiKey){if(typeof input.apiKey!=='string'||input.apiKey.length<20||input.apiKey.length>4096)fail(400,'مفتاح API غير صالح');cfg.apiKey=input.apiKey;}
  if(input.model!==undefined){if(input.model&&!/^[A-Za-z0-9._:-]{1,100}$/.test(input.model))fail(400,'اسم نموذج غير صالح');cfg.model=input.model;}
  if(input.enabled!==undefined){if(typeof input.enabled!=='boolean')fail(400,'حالة غير صحيحة');if(input.enabled&&input.external_data_ack!==true)fail(400,'راجع الموافقة على إرسال السؤال والإحصاءات المجمعة إلى OpenAI');cfg.enabled=input.enabled;}
